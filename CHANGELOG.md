@@ -10,20 +10,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Planned
-- Full POSIX job control (`jobs`, `fg`, `bg`), process group creation (`setpgid`), and `SIGCHLD` signal handler zombie reaping (`v0.3.0`).
 - Script file execution mode and environment variable expansion (`v0.4.0`).
 - GitHub Actions CI matrix builds and Valgrind memory leak verification (`v1.0.0`).
 
 ---
 
-## [0.3.0-alpha] - 2026-07-23
+## [0.3.0] - 2026-07-23
 
 ### Added
-- **Asynchronous Background Process Execution (`&`)**: Added support for executing single commands (`cmd &`) and multi-stage pipelines (`cmd1 | cmd2 &`) asynchronously without blocking the interactive prompt.
-- **Internal Job Management Subsystem**: Implemented encapsulated Job Table in `include/jobs.h` and `src/jobs.c` featuring `Job` structure tracking sequential `job_id`, `pgid`, `pid`, `command`, `state`, and `is_background`.
-- **Job Lifecycle APIs**: Added `init_job_table()`, `add_job()`, `find_job_by_id()`, `find_job_by_pid()`, `remove_job_by_id()`, `remove_completed_jobs()`, and `destroy_job_table()`.
-- **Command Line Formatting**: Added `format_command_string()` to reconstruct `Command` AST pipelines into readable command strings stored inside `Job` records.
-- **Automated Unit Test Suite**: Added `tests/test_jobs.c` providing 100% pass rate and zero Valgrind leaks for job table operations.
+- **POSIX Job Control Subsystem (`jobs`, `fg`, `bg`)**: Implemented built-in commands `jobs` (lists active/stopped jobs), `fg` (brings background/stopped job to foreground), and `bg` (resumes stopped job in background).
+- **Process Group Isolation (`setpgid`)**: Isolated single commands and multi-stage pipeline stages into unique process groups (`setpgid`), ensuring Ctrl+C (`SIGINT`) and Ctrl+Z (`SIGTSTP`) signals target process groups rather than ShellX.
+- **Terminal Control (`tcsetpgrp`)**: Implemented dynamic terminal ownership transfer (`give_terminal_to`) between ShellX and active foreground process groups.
+- **Signal Handling & Async Reaping (`signals.c`)**: Added `init_signals()`, `setup_child_signals()`, and `update_job_status()` with non-blocking `waitpid(-1, &status, WNOHANG | WUNTRACED | WCONTINUED)` for zero zombie accumulation.
+- **Unit & System Tests**: Created `tests/test_signals.c` and updated test suite for 100% pass rate and zero Valgrind leaks across all binaries.
 
 ---
 

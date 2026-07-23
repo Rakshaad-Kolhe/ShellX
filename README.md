@@ -40,12 +40,12 @@ The feature matrix below details the current implementation state of **ShellX**.
 | **Automated Test Suite** | ✔ Implemented | Comprehensive unit test suite covering parser, executor, built-in, and pipeline modules. |
 | **GNU Readline / Line Editing** | ✔ Implemented | Interactive prompt (`ShellX$ `), arrow key line editing, and `Ctrl+D` EOF handling (`v0.2.0`). |
 | **Persistent History** | ✔ Implemented | History persistence across shell sessions stored in `~/.shellx_history` with duplicate filtering (`v0.2.0`). |
-| **Background Execution (`&`)** | ✔ Implemented | Asynchronous background execution (`cmd &`, `cmd1 \| cmd2 &`) displaying `[job_id] <pid>` (`v0.3.0-alpha`). |
-| **Job Table Infrastructure** | ✔ Implemented | Encapsulated in-memory Job Table tracking background processes and pipelines (`v0.3.0-alpha`). |
-| **POSIX Job Control (`fg`/`bg`)** | ❌ Planned | Scheduled for milestone `v0.3.0`. |
+| **Background Execution (`&`)** | ✔ Implemented | Asynchronous background execution (`cmd &`, `cmd1 \| cmd2 &`) displaying `[job_id] <pid>` (`v0.3.0`). |
+| **Job Table Infrastructure** | ✔ Implemented | Encapsulated in-memory Job Table tracking background processes and pipelines (`v0.3.0`). |
+| **POSIX Job Control (`fg`/`bg`/`jobs`)** | ✔ Implemented | Process group isolation (`setpgid`), terminal control (`tcsetpgrp`), signal handling (`SIGINT`/`SIGTSTP`/`SIGCHLD`), and `jobs`/`fg`/`bg` built-ins (`v0.3.0`). |
 
 > [!NOTE]
-> Asynchronous background process execution (`&`) registers jobs in the internal Job Table (`include/jobs.h`, `src/jobs.c`). User-facing job control commands (`jobs`, `fg`, `bg`), process group creation (`setpgid`), and `SIGCHLD` signal handler zombie reaping will be added in the upcoming job control release.
+> ShellX implements full POSIX job control. Background processes and multi-stage pipelines run in isolated process groups, support terminal ownership transfer (`tcsetpgrp`), and can be monitored or resumed using `jobs`, `fg %id`, and `bg %id`.
 
 ---
 

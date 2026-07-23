@@ -107,8 +107,23 @@ static void test_is_builtin_recognizes_exit(void)
     assert(is_builtin(&command) != 0);
 }
 
+static void test_is_builtin_recognizes_jobs_fg_bg(void)
+{
+    char *jobs_argv[] = {"jobs"};
+    char *fg_argv[] = {"fg"};
+    char *bg_argv[] = {"bg"};
+    Command jobs_cmd = make_command(jobs_argv, 1);
+    Command fg_cmd = make_command(fg_argv, 1);
+    Command bg_cmd = make_command(bg_argv, 1);
+
+    assert(is_builtin(&jobs_cmd) != 0);
+    assert(is_builtin(&fg_cmd) != 0);
+    assert(is_builtin(&bg_cmd) != 0);
+}
+
 static void test_is_builtin_rejects_external_command(void)
 {
+
     char *argv[] = {"ls"};
     Command command = make_command(argv, 1);
 
@@ -281,7 +296,9 @@ int main(void)
     test_is_builtin_empty_command_returns_zero();
     test_is_builtin_recognizes_cd();
     test_is_builtin_recognizes_exit();
+    test_is_builtin_recognizes_jobs_fg_bg();
     test_is_builtin_rejects_external_command();
+
     test_is_builtin_rejects_similar_names();
 
     test_execute_builtin_null_command_returns_one();

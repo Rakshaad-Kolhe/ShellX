@@ -13,7 +13,7 @@ typedef enum JobState {
 
 typedef struct Job {
     int job_id;               /* 1-based sequential job ID */
-    pid_t pgid;               /* Process Group ID (leader PID) */
+    pid_t pgid;               /* Process Group ID */
     pid_t pid;                /* Leader process PID */
     char *command;            /* Reconstructed command string */
     JobState state;           /* JobState: JOB_RUNNING, JOB_STOPPED, JOB_DONE */
@@ -55,6 +55,22 @@ int remove_job_by_id(int job_id);
  * Returns number of jobs removed.
  */
 int remove_completed_jobs(void);
+
+/*
+ * Update the state of all jobs non-blockingly using waitpid(..., WNOHANG).
+ */
+void update_job_status(void);
+
+/*
+ * Print formatted list of active jobs and clean up completed jobs.
+ */
+void print_jobs(void);
+
+/*
+ * Synchronize with a foreground job and handle terminal ownership restore.
+ * Returns 0 if job exited cleanly, or exit status / signal status code.
+ */
+int wait_for_job(Job *job);
 
 /*
  * Destroy all registered jobs and free memory allocated by the job table.

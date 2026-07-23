@@ -4,6 +4,7 @@
 #include "parser.h"
 #include "pipeline.h"
 #include "shell.h"
+#include "signals.h"
 
 #include <ctype.h>
 #include <stdio.h>
@@ -70,6 +71,7 @@ int main(void)
     char *history_path;
     int should_exit = 0;
 
+    init_signals();
     init_job_table();
 
     history_path = get_history_file_path();
@@ -80,6 +82,8 @@ int main(void)
     while (!should_exit) {
         char *line;
         Command *commands;
+
+        update_job_status();
 
         line = readline(SHELLX_PROMPT);
         if (line == NULL) {
