@@ -10,9 +10,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Planned
-- POSIX job control, background job processing (`&`), and `jobs`/`fg`/`bg` built-ins (`v0.3.0`).
+- Full POSIX job control (`jobs`, `fg`, `bg`), process group creation (`setpgid`), and `SIGCHLD` signal handler zombie reaping (`v0.3.0`).
 - Script file execution mode and environment variable expansion (`v0.4.0`).
 - GitHub Actions CI matrix builds and Valgrind memory leak verification (`v1.0.0`).
+
+---
+
+## [0.3.0-alpha] - 2026-07-23
+
+### Added
+- **Asynchronous Background Process Execution (`&`)**: Added support for executing single commands (`cmd &`) and multi-stage pipelines (`cmd1 | cmd2 &`) asynchronously without blocking the interactive prompt.
+- **Job ID & PID Output**: Formatted background launch output to display `[job_id] <pid>` (e.g., `[1] 12345`).
+- **Shared Job Generator**: Added `get_next_job_id()` helper in `include/executor.h` and `src/executor.c` to generate sequential 1-based job IDs.
+- **Automated Unit Tests**: Added unit tests in `tests/test_executor.c` and `tests/test_pipeline.c` verifying immediate background process launch.
 
 ---
 

@@ -366,6 +366,19 @@ static void test_borrowed_command_list_is_not_mutated(void)
                              second_original_run_in_background);
 }
 
+static void test_background_pipeline_returns_immediately(void)
+{
+    char *first_argv[] = {"printf", "hello\n"};
+    char *second_argv[] = {"grep", "hello"};
+    Command first = make_command(first_argv, 2);
+    Command second = make_command(second_argv, 2);
+
+    first.run_in_background = 1;
+    link_commands(&first, &second);
+
+    assert(execute_pipeline(&first) == 0);
+}
+
 int main(void)
 {
     test_null_pipeline_returns_nonzero();
@@ -384,6 +397,7 @@ int main(void)
     test_pipeline_append_redirection();
     test_pipeline_mixed_input_and_output_redirection();
     test_borrowed_command_list_is_not_mutated();
+    test_background_pipeline_returns_immediately();
 
     printf("All pipeline tests passed.\n");
 

@@ -7,6 +7,14 @@
 #include <sys/wait.h>
 #include <unistd.h>
 
+int get_next_job_id(void)
+{
+    static int current_job_id = 0;
+
+    current_job_id++;
+    return current_job_id;
+}
+
 void close_if_open(int fd)
 {
     if (fd != -1) {
@@ -177,6 +185,12 @@ int execute_command(const Command *command)
     child_pid = spawn_child(command, -1, -1, -1);
     if (child_pid < 0) {
         return 1;
+    }
+
+    if (command->run_in_background) {
+        printf("[%d] %d\n", get_next_job_id(), (int)child_pid);
+        fflush(stdout);
+        return 0;
     }
 
     return wait_for_child(child_pid);

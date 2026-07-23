@@ -40,10 +40,11 @@ The feature matrix below details the current implementation state of **ShellX**.
 | **Automated Test Suite** | ✔ Implemented | Comprehensive unit test suite covering parser, executor, built-in, and pipeline modules. |
 | **GNU Readline / Line Editing** | ✔ Implemented | Interactive prompt (`ShellX$ `), arrow key line editing, and `Ctrl+D` EOF handling (`v0.2.0`). |
 | **Persistent History** | ✔ Implemented | History persistence across shell sessions stored in `~/.shellx_history` with duplicate filtering (`v0.2.0`). |
+| **Background Execution (`&`)** | ✔ Implemented | Asynchronous background execution (`cmd &`, `cmd1 \| cmd2 &`) displaying `[job_id] <pid>` (`v0.3.0-alpha`). |
 | **POSIX Job Control (`fg`/`bg`)** | ❌ Planned | Scheduled for milestone `v0.3.0`. |
 
 > [!NOTE]
-> Background command syntax (`&`) sets an internal parser flag (`run_in_background`), but asynchronous job control process management is scheduled for `v0.3.0`.
+> Asynchronous background command execution (`&`) launches processes without waiting for completion and immediately redisplays the shell prompt. Full POSIX job control (`jobs`, `fg`, `bg`), process group management (`setpgid`), and `SIGCHLD` signal handler zombie reaping will be added in the upcoming job control milestone.
 
 ---
 
