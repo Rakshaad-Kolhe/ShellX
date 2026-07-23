@@ -101,7 +101,19 @@ int execute_pipeline(const Command *commands)
 
     close_if_open(previous_read_fd);
 
+    if (execution_failed) {
+        free(pids);
+        return 1;
+    }
+
     if (child_count > 0) {
+        if (commands->run_in_background) {
+            printf("[%d] %d\n", get_next_job_id(), (int)pids[child_count - 1]);
+            fflush(stdout);
+            free(pids);
+            return 0;
+        }
+
         size_t index;
 
         for (index = 0; index < child_count; index++) {
@@ -113,10 +125,5 @@ int execute_pipeline(const Command *commands)
     }
 
     free(pids);
-
-    if (execution_failed) {
-        return 1;
-    }
-
     return final_status;
 }

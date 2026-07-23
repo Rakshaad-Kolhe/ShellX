@@ -316,6 +316,16 @@ static void test_borrowed_command_is_not_modified_with_redirection(void)
     remove_file_if_present(output_path);
 }
 
+static void test_background_command_returns_immediately(void)
+{
+    char *argv[] = {"sleep", "1"};
+    Command command = make_command(argv, 2);
+
+    command.run_in_background = 1;
+
+    assert(execute_command(&command) == 0);
+}
+
 int main(void)
 {
     test_null_command_returns_one();
@@ -334,8 +344,10 @@ int main(void)
     test_combined_input_and_output_redirection();
     test_nonexistent_input_file_returns_nonzero();
     test_borrowed_command_is_not_modified_with_redirection();
+    test_background_command_returns_immediately();
 
     printf("All executor tests passed.\n");
 
     return 0;
 }
+

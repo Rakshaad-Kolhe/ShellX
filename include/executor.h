@@ -6,14 +6,19 @@
 #include <sys/types.h>
 
 /*
+ * Generate an incrementing 1-based job ID for background commands.
+ */
+int get_next_job_id(void);
+
+/*
  * Close a file descriptor if it is not -1.
  */
 void close_if_open(int fd);
 
 /*
- * Execute one foreground command.
+ * Execute one foreground or background command.
  * The command is borrowed and must not be modified or freed.
- * Returns the command's exit status when available, or nonzero on failure.
+ * Returns the command's exit status when available, or zero for background processes.
  */
 int execute_command(const Command *command);
 
