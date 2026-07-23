@@ -1,0 +1,38 @@
+# Build outputs
+/build/
+*.o
+*.obj
+*.a
+*.so
+*.dylib
+*.dll
+*.exe
+
+# Debug artifacts & Symbols
+*.dSYM/
+*.su
+*.idb
+*.pdb
+
+# Core dumps
+core
+core.[0-9]*
+
+# Profiling & Code Coverage
+*.gcda
+*.gcno
+gmon.out
+coverage/
+
+# Language Server Protocol & IDEs
+.vscode/
+.idea/
+.cache/
+.clangd/
+compile_commands.json
+
+# Editor backup & temporary files
+*.swp
+*~
+*.swo
+.DS_Store
