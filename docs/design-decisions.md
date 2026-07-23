@@ -98,3 +98,27 @@ if (WIFSIGNALED(status)) {
 ### Special Exit Codes
 - **`127`**: Returned when binary execution fails (`execvp` error, command not found).
 - **`126`**: Returned when child environment setup or redirection file opening fails prior to execution.
+
+---
+
+## 6. Encapsulated Job Table Architecture
+
+### Decision
+Maintain an encapsulated internal Job Table (`include/jobs.h`, `src/jobs.c`) that tracks background processes and pipelines in a private linked list rather than exposing raw global mutable state.
+
+```c
+typedef struct Job {
+    int job_id;
+    pid_t pgid;
+    pid_t pid;
+    char *command;
+    JobState state;
+    int is_background;
+    struct Job *next;
+} Job;
+```
+
+### Rationale
+- **Encapsulation**: Hides internal list structure behind clean accessor APIs (`add_job`, `find_job_by_id`, `find_job_by_pid`, `remove_job_by_id`, `destroy_job_table`), preventing unauthorized mutations across execution modules.
+- **Logical Pipeline Unit**: Multi-stage pipelines register a single `Job` record storing the pipeline leader PID and full command string, providing the architectural foundation for upcoming POSIX job control commands (`jobs`, `fg`, `bg`).
+- **Memory Safety Guarantee**: `destroy_job_table()` cleans up all allocated `Job` structures and command strings upon shell exit, ensuring zero Valgrind memory leaks.

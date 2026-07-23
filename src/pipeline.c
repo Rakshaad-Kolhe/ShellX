@@ -108,8 +108,15 @@ int execute_pipeline(const Command *commands)
 
     if (child_count > 0) {
         if (commands->run_in_background) {
-            printf("[%d] %d\n", get_next_job_id(), (int)pids[child_count - 1]);
-            fflush(stdout);
+            char *cmd_str = format_command_string(commands);
+            pid_t leader_pid = pids[child_count - 1];
+            Job *job = add_job(leader_pid, pids[0], cmd_str, 1);
+            free(cmd_str);
+
+            if (job != NULL) {
+                printf("[%d] %d\n", job->job_id, (int)leader_pid);
+                fflush(stdout);
+            }
             free(pids);
             return 0;
         }

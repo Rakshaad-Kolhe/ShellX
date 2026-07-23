@@ -41,10 +41,11 @@ The feature matrix below details the current implementation state of **ShellX**.
 | **GNU Readline / Line Editing** | ✔ Implemented | Interactive prompt (`ShellX$ `), arrow key line editing, and `Ctrl+D` EOF handling (`v0.2.0`). |
 | **Persistent History** | ✔ Implemented | History persistence across shell sessions stored in `~/.shellx_history` with duplicate filtering (`v0.2.0`). |
 | **Background Execution (`&`)** | ✔ Implemented | Asynchronous background execution (`cmd &`, `cmd1 \| cmd2 &`) displaying `[job_id] <pid>` (`v0.3.0-alpha`). |
+| **Job Table Infrastructure** | ✔ Implemented | Encapsulated in-memory Job Table tracking background processes and pipelines (`v0.3.0-alpha`). |
 | **POSIX Job Control (`fg`/`bg`)** | ❌ Planned | Scheduled for milestone `v0.3.0`. |
 
 > [!NOTE]
-> Asynchronous background command execution (`&`) launches processes without waiting for completion and immediately redisplays the shell prompt. Full POSIX job control (`jobs`, `fg`, `bg`), process group management (`setpgid`), and `SIGCHLD` signal handler zombie reaping will be added in the upcoming job control milestone.
+> Asynchronous background process execution (`&`) registers jobs in the internal Job Table (`include/jobs.h`, `src/jobs.c`). User-facing job control commands (`jobs`, `fg`, `bg`), process group creation (`setpgid`), and `SIGCHLD` signal handler zombie reaping will be added in the upcoming job control release.
 
 ---
 

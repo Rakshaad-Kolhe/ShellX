@@ -1,5 +1,6 @@
 #include "builtins.h"
 #include "executor.h"
+#include "jobs.h"
 #include "parser.h"
 #include "pipeline.h"
 #include "shell.h"
@@ -69,6 +70,8 @@ int main(void)
     char *history_path;
     int should_exit = 0;
 
+    init_job_table();
+
     history_path = get_history_file_path();
     if (history_path != NULL) {
         read_history(history_path);
@@ -112,6 +115,7 @@ int main(void)
     }
 
     clear_history();
+    destroy_job_table();
 
     return 0;
 }
