@@ -16,7 +16,7 @@ A lightweight, POSIX-compliant UNIX shell written in modern C17, designed as an 
 **ShellX** is a minimalist UNIX shell implementation focused on foundational systems programming concepts. It serves as an architectural blueprint for understanding process management, memory safety, lexical tokenization, file descriptor manipulation, and pipeline synchronization.
 
 ### Why ShellX Exists
-Modern shells like `bash` and `zsh` consist of hundreds of thousands of lines of legacy code, making them difficult to study for core operating system mechanisms. **ShellX** strips away complex interactive features (e.g., dynamic line editing, alias expansion, parameter expansion) to highlight clean, unadorned UNIX kernel primitives (`fork`, `execvp`, `pipe`, `dup2`, `waitpid`).
+Modern shells like `bash` and `zsh` consist of hundreds of thousands of lines of legacy code, making them difficult to study for core operating system mechanisms. **ShellX** strips away complex interactive features (e.g., alias expansion, parameter expansion) to highlight clean, unadorned UNIX kernel primitives (`fork`, `execvp`, `pipe`, `dup2`, `waitpid`).
 
 ### Primary Objectives
 - **Systems Programming Rigor**: Showcase strict C17 standards compliance (`-std=c17 -Wall -Wextra -Wpedantic`), robust memory handling, and explicit error checking.
@@ -38,8 +38,8 @@ The feature matrix below details the current implementation state of **ShellX**.
 | **Output Redirection** | ✔ Implemented | File output truncation redirection using `>` operator (`O_WRONLY \| O_CREAT \| O_TRUNC`). |
 | **Append Redirection** | ✔ Implemented | File output append redirection using `>>` operator (`O_WRONLY \| O_CREAT \| O_APPEND`). |
 | **Automated Test Suite** | ✔ Implemented | Comprehensive unit test suite covering parser, executor, built-in, and pipeline modules. |
-| **GNU Readline / Line Editing** | ❌ Planned | Scheduled for milestone `v0.2.0`. |
-| **Persistent History** | ❌ Planned | Scheduled for milestone `v0.2.0`. |
+| **GNU Readline / Line Editing** | ✔ Implemented | Interactive prompt (`ShellX$ `), arrow key line editing, and `Ctrl+D` EOF handling (`v0.2.0`). |
+| **Persistent History** | ✔ Implemented | History persistence across shell sessions stored in `~/.shellx_history` with duplicate filtering (`v0.2.0`). |
 | **POSIX Job Control (`fg`/`bg`)** | ❌ Planned | Scheduled for milestone `v0.3.0`. |
 
 > [!NOTE]
@@ -53,7 +53,8 @@ ShellX follows a modular compilation architecture where execution flow is divide
 
 ```mermaid
 flowchart TD
-    User([User Input String]) --> Parser[Parser Module<br/>parse_command_line]
+    User([User Interactive Input]) --> Readline[GNU Readline & History<br/>readline, add_history, read/write_history]
+    Readline --> Parser[Parser Module<br/>parse_command_line]
     Parser --> AST[Command Linked List AST<br/>Command struct]
     AST --> Router{Is Built-in or Pipeline?}
     Router -->|Pipeline / Multi-stage| Pipeline[Pipeline Engine<br/>execute_pipeline]
@@ -66,7 +67,8 @@ flowchart TD
 ```
 
 ### Module Responsibilities
-- [include/parser.h](file:///wsl.localhost/Ubuntu/home/rakshaad/projects/ShellX/include/parser.h) & [src/parser.c](file:///wsl.localhost/Ubuntu/home/rakshaad/projects/ShellX/src/parser.c): Tokenizes stdin input into null-terminated argument arrays and builds a linked list of `Command` structures.
+- [include/shell.h](file:///wsl.localhost/Ubuntu/home/rakshaad/projects/ShellX/include/shell.h) & [src/main.c](file:///wsl.localhost/Ubuntu/home/rakshaad/projects/ShellX/src/main.c): Interactive REPL entry point managing GNU Readline input loop, prompt rendering (`ShellX$ `), persistent history loading/saving (`~/.shellx_history`), and `Ctrl+D` EOF handling.
+- [include/parser.h](file:///wsl.localhost/Ubuntu/home/rakshaad/projects/ShellX/include/parser.h) & [src/parser.c](file:///wsl.localhost/Ubuntu/home/rakshaad/projects/ShellX/src/parser.c): Tokenizes input line into null-terminated argument arrays and builds a linked list of `Command` structures.
 - [include/pipeline.h](file:///wsl.localhost/Ubuntu/home/rakshaad/projects/ShellX/include/pipeline.h) & [src/pipeline.c](file:///wsl.localhost/Ubuntu/home/rakshaad/projects/ShellX/src/pipeline.c): Manages iterative pipe descriptor creation, child process spawns, descriptor inheritance, and exit status collection.
 - [include/executor.h](file:///wsl.localhost/Ubuntu/home/rakshaad/projects/ShellX/include/executor.h) & [src/executor.c](file:///wsl.localhost/Ubuntu/home/rakshaad/projects/ShellX/src/executor.c): Spawns individual child processes, applies file redirections (`<`, `>`, `>>`), and executes binaries via `execvp`.
 - [include/builtins.h](file:///wsl.localhost/Ubuntu/home/rakshaad/projects/ShellX/include/builtins.h) & [src/builtins.c](file:///wsl.localhost/Ubuntu/home/rakshaad/projects/ShellX/src/builtins.c): Executes shell state modification commands directly within the main shell process.
@@ -81,11 +83,12 @@ ShellX/
 │   ├── builtins.h            # Built-in command functions (cd, exit)
 │   ├── executor.h            # Process spawning & redirection interface
 │   ├── parser.h              # Syntax parser & command list builder
-│   └── pipeline.h            # Command AST structure & pipeline executor
+│   ├── pipeline.h            # Command AST structure & pipeline executor
+│   └── shell.h               # Prompt macro & history file constants
 ├── src/                       # Source implementation files
 │   ├── builtins.c            # cd and exit execution logic
 │   ├── executor.c            # fork, dup2, execvp, waitpid implementation
-│   ├── main.c                # Interactive REPL entry point
+│   ├── main.c                # Interactive REPL entry point with Readline
 │   ├── parser.c              # Lexical parser & memory lifecycle functions
 │   └── pipeline.c            # Iterative multi-process IPC pipeline engine
 ├── tests/                     # Unit test suite binaries & sources
@@ -120,6 +123,13 @@ ShellX/
 - **Operating System**: Linux or POSIX-compliant UNIX environment (including WSL on Windows).
 - **Compiler**: GCC or Clang supporting `-std=c17`.
 - **Build System**: GNU Make.
+- **Development Library**: GNU Readline development headers (`libreadline-dev` / `readline-devel`).
+
+#### Installing Dependencies (Ubuntu / Debian)
+```bash
+sudo apt update
+sudo apt install build-essential libreadline-dev
+```
 
 ### Compilation
 To compile the shell binary:
@@ -152,23 +162,35 @@ make rebuild  # Performs a clean build from scratch
 
 ---
 
+## Interactive Features & Keyboard Shortcuts
+
+ShellX provides a modern interactive shell experience powered by **GNU Readline**:
+
+- **Configurable Prompt**: Displays `ShellX$ ` before every command.
+- **Line Editing**: Use Left/Right arrow keys, `Ctrl+A` (beginning of line), `Ctrl+E` (end of line), `Ctrl+K` (kill line).
+- **History Navigation**: Use **Up** and **Down** arrow keys to traverse previous commands.
+- **Persistent History**: Commands are saved to `~/.shellx_history` upon exit and loaded automatically on startup. Consecutive duplicate commands and blank inputs are automatically filtered out.
+- **Clean EOF Exit**: Press `Ctrl+D` on an empty line to exit the shell cleanly.
+
+---
+
 ## Example Terminal Sessions
 
 Below are actual output sessions demonstrating **ShellX** supported capabilities.
 
 ### 1. Simple Commands & Built-in Operations
 ```text
-shellx> echo hello
+ShellX$ echo hello
 hello
-shellx> cd tests
-shellx> exit
+ShellX$ cd tests
+ShellX$ exit
 ```
 
 ### 2. Pipeline Execution
 ```text
-shellx> printf hello | grep hello
+ShellX$ printf hello | grep hello
 hello
-shellx> seq 1 10 | tail -n 3
+ShellX$ seq 1 10 | tail -n 3
 8
 9
 10
@@ -176,11 +198,11 @@ shellx> seq 1 10 | tail -n 3
 
 ### 3. File Input & Output Redirection
 ```text
-shellx> echo "ShellX Production Release" > output.txt
-shellx> cat < output.txt
+ShellX$ echo "ShellX Production Release" > output.txt
+ShellX$ cat < output.txt
 ShellX Production Release
-shellx> echo "Appending extra line" >> output.txt
-shellx> cat < output.txt | grep Appending
+ShellX$ echo "Appending extra line" >> output.txt
+ShellX$ cat < output.txt | grep Appending
 Appending extra line
 ```
 
@@ -195,10 +217,11 @@ Appending extra line
   - [x] Multi-stage process pipelines (`cmd1 | cmd2 | cmd3`)
   - [x] In-process built-ins (`cd`, `exit`)
   - [x] Automated unit test suite with 100% test pass rate
-- [ ] **Phase 2 — Line Editing & Persistent History (v0.2.0)**
-  - [ ] Integration with GNU Readline / BSD Editline
-  - [ ] Arrow key navigation and line editing
-  - [ ] Persistent command history stored in `~/.shellx_history`
+- [x] **Phase 2 — Line Editing & Persistent History (v0.2.0)**
+  - [x] Integration with GNU Readline
+  - [x] Interactive `ShellX$ ` prompt and line editing keybindings
+  - [x] Up/Down arrow history navigation
+  - [x] Persistent command history stored in `~/.shellx_history` with duplicate filtering
 - [ ] **Phase 3 — POSIX Job Control & Signal Handling (v0.3.0)**
   - [ ] Background job execution (`&`) with process table tracking
   - [ ] Process group creation (`setpgid`) and terminal control (`tcsetpgrp`)

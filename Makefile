@@ -21,7 +21,7 @@ TEST_PIPELINE_OBJS := $(BUILD_DIR)/test_pipeline.o $(BUILD_DIR)/pipeline.o $(BUI
 all: $(SHELLX)
 
 $(SHELLX): $(SHELLX_OBJS) | $(BUILD_DIR)
-	$(CC) $(CFLAGS) $(CPPFLAGS) -o $@ $^
+	$(CC) $(CFLAGS) $(CPPFLAGS) -o $@ $^ -lreadline
 
 $(TEST_PARSER): $(TEST_PARSER_OBJS) | $(BUILD_DIR)
 	$(CC) $(CFLAGS) $(CPPFLAGS) -o $@ $^
@@ -35,7 +35,7 @@ $(TEST_BUILTINS): $(TEST_BUILTINS_OBJS) | $(BUILD_DIR)
 $(TEST_PIPELINE): $(TEST_PIPELINE_OBJS) | $(BUILD_DIR)
 	$(CC) $(CFLAGS) $(CPPFLAGS) -o $@ $^
 
-$(BUILD_DIR)/main.o: src/main.c include/parser.h include/executor.h include/builtins.h include/pipeline.h | $(BUILD_DIR)
+$(BUILD_DIR)/main.o: src/main.c include/parser.h include/executor.h include/builtins.h include/pipeline.h include/shell.h | $(BUILD_DIR)
 	$(CC) $(CFLAGS) $(CPPFLAGS) -c $< -o $@
 
 $(BUILD_DIR)/parser.o: src/parser.c include/parser.h include/pipeline.h | $(BUILD_DIR)

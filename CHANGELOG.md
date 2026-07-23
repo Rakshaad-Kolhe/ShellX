@@ -10,11 +10,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Planned
-- Integration with GNU Readline / BSD Editline for interactive line editing (`v0.2.0`).
-- Persistent command history file support (`~/.shellx_history`) (`v0.2.0`).
 - POSIX job control, background job processing (`&`), and `jobs`/`fg`/`bg` built-ins (`v0.3.0`).
 - Script file execution mode and environment variable expansion (`v0.4.0`).
 - GitHub Actions CI matrix builds and Valgrind memory leak verification (`v1.0.0`).
+
+---
+
+## [0.2.0] - 2026-07-23
+
+### Added
+- **GNU Readline Integration**: Replaced `fgets()` input loop in `src/main.c` with GNU `readline()` for interactive line editing.
+- **Configurable Prompt**: Added `ShellX$ ` prompt macro (`SHELLX_PROMPT`) in `include/shell.h`.
+- **Persistent Command History**: Integrated `read_history()` and `write_history()` to persist history entries across sessions to `~/.shellx_history`.
+- **Duplicate & Blank Filtering**: Implemented consecutive duplicate filtering (`is_duplicate_history`) and blank input skipping to keep history clean.
+- **Clean EOF Handling**: Added graceful `Ctrl+D` (EOF) exit handling without memory leaks (`clear_history()`).
+- **Build System Update**: Updated `Makefile` to link `-lreadline` and documented `libreadline-dev` system dependency in `README.md`.
 
 ---
 
