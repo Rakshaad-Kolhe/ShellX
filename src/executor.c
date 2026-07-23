@@ -7,6 +7,13 @@
 #include <sys/wait.h>
 #include <unistd.h>
 
+void close_if_open(int fd)
+{
+    if (fd != -1) {
+        close(fd);
+    }
+}
+
 static int redirect_input(const char *path)
 {
     int input_fd;
@@ -79,13 +86,6 @@ static int apply_redirections(const Command *command)
     return 0;
 }
 
-static void close_if_open(int fd)
-{
-    if (fd != -1) {
-        close(fd);
-    }
-}
-
 static int setup_child_stdio(int input_fd, int output_fd)
 {
     if (input_fd != -1 && dup2(input_fd, STDIN_FILENO) == -1) {
@@ -105,6 +105,10 @@ pid_t spawn_child(const Command *command, int input_fd, int output_fd,
                   int close_fd)
 {
     pid_t child_pid;
+
+    if (command == NULL || command->arg_count == 0 || command->args[0] == NULL) {
+        return -1;
+    }
 
     child_pid = fork();
     if (child_pid < 0) {
@@ -136,21 +140,15 @@ pid_t spawn_child(const Command *command, int input_fd, int output_fd,
     return child_pid;
 }
 
-int execute_command(const Command *command)
+int wait_for_child(pid_t pid)
 {
-    pid_t child_pid;
     int status;
 
-    if (command == NULL || command->arg_count == 0 || command->args[0] == NULL) {
+    if (pid <= 0) {
         return 1;
     }
 
-    child_pid = spawn_child(command, -1, -1, -1);
-    if (child_pid < 0) {
-        return 1;
-    }
-
-    while (waitpid(child_pid, &status, 0) == -1) {
+    while (waitpid(pid, &status, 0) == -1) {
         if (errno != EINTR) {
             perror("waitpid");
             return 1;
@@ -166,4 +164,20 @@ int execute_command(const Command *command)
     }
 
     return 1;
+}
+
+int execute_command(const Command *command)
+{
+    pid_t child_pid;
+
+    if (command == NULL || command->arg_count == 0 || command->args[0] == NULL) {
+        return 1;
+    }
+
+    child_pid = spawn_child(command, -1, -1, -1);
+    if (child_pid < 0) {
+        return 1;
+    }
+
+    return wait_for_child(child_pid);
 }
