@@ -1,8 +1,16 @@
+#define _POSIX_C_SOURCE 200809L
+
 #include "jobs.h"
+
+
+#include "signals.h"
 
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/types.h>
+#include <sys/wait.h>
+#include <unistd.h>
 
 static Job *job_list_head = NULL;
 static int next_job_id_counter = 1;
@@ -148,6 +156,83 @@ int remove_completed_jobs(void)
     }
 
     return count;
+}
+
+void update_job_status(void)
+{
+    int status;
+    pid_t pid;
+
+    while ((pid = waitpid(-1, &status, WNOHANG | WUNTRACED | WCONTINUED)) > 0) {
+        Job *job = find_job_by_pid(pid);
+        if (job != NULL) {
+            if (WIFSTOPPED(status)) {
+                job->state = JOB_STOPPED;
+            } else if (WIFCONTINUED(status)) {
+                job->state = JOB_RUNNING;
+            } else if (WIFEXITED(status) || WIFSIGNALED(status)) {
+                job->state = JOB_DONE;
+            }
+        }
+    }
+}
+
+void print_jobs(void)
+{
+    Job *cursor;
+
+    update_job_status();
+
+    cursor = job_list_head;
+    while (cursor != NULL) {
+        const char *state_str = "Running";
+        char current_marker = ' ';
+
+        if (cursor->state == JOB_STOPPED) {
+            state_str = "Stopped";
+            current_marker = '+';
+        } else if (cursor->state == JOB_DONE) {
+            state_str = "Done";
+        }
+
+        printf("[%d]%c %-24s %s\n", cursor->job_id, current_marker, state_str, cursor->command);
+        cursor = cursor->next;
+    }
+
+    remove_completed_jobs();
+}
+
+int wait_for_job(Job *job)
+{
+    int status = 0;
+    pid_t pid;
+
+    if (job == NULL) {
+        return 1;
+    }
+
+    give_terminal_to(job->pgid);
+
+    while ((pid = waitpid(-job->pgid, &status, WUNTRACED)) > 0) {
+        if (WIFSTOPPED(status)) {
+            job->state = JOB_STOPPED;
+            printf("\n[%d]+ Stopped                 %s\n", job->job_id, job->command);
+            fflush(stdout);
+            break;
+        } else if (WIFEXITED(status) || WIFSIGNALED(status)) {
+            job->state = JOB_DONE;
+        }
+    }
+
+    give_terminal_to(get_shell_pgid());
+
+    if (job->state == JOB_DONE) {
+        int exit_code = WIFEXITED(status) ? WEXITSTATUS(status) : 128 + WTERMSIG(status);
+        remove_job_by_id(job->job_id);
+        return exit_code;
+    }
+
+    return 128 + WSTOPSIG(status);
 }
 
 void destroy_job_table(void)

@@ -1,6 +1,10 @@
+#define _POSIX_C_SOURCE 200809L
+
 #include "pipeline.h"
 
+
 #include "executor.h"
+#include "jobs.h"
 
 #include <errno.h>
 #include <stdio.h>
@@ -48,7 +52,7 @@ int execute_pipeline(const Command *commands)
     size_t child_count = 0;
     int previous_read_fd = -1;
     int execution_failed = 0;
-    int final_status = 1;
+    pid_t leader_pgid = 0;
 
     if (!validate_commands(commands)) {
         return 1;
@@ -75,7 +79,7 @@ int execute_pipeline(const Command *commands)
         }
 
         child_pid = spawn_child(command, previous_read_fd,
-                                has_next ? pipe_fds[1] : -1, pipe_fds[0]);
+                                has_next ? pipe_fds[1] : -1, pipe_fds[0], leader_pgid);
         if (child_pid < 0) {
             close_if_open(previous_read_fd);
             previous_read_fd = -1;
@@ -83,6 +87,10 @@ int execute_pipeline(const Command *commands)
             close_if_open(pipe_fds[1]);
             execution_failed = 1;
             break;
+        }
+
+        if (leader_pgid == 0) {
+            leader_pgid = child_pid;
         }
 
         pids[child_count] = child_pid;
@@ -107,30 +115,25 @@ int execute_pipeline(const Command *commands)
     }
 
     if (child_count > 0) {
-        if (commands->run_in_background) {
-            char *cmd_str = format_command_string(commands);
-            pid_t leader_pid = pids[child_count - 1];
-            Job *job = add_job(leader_pid, pids[0], cmd_str, 1);
-            free(cmd_str);
+        char *cmd_str = format_command_string(commands);
+        pid_t last_pid = pids[child_count - 1];
+        Job *job = add_job(last_pid, leader_pgid, cmd_str, commands->run_in_background);
+        free(cmd_str);
 
+        if (commands->run_in_background) {
             if (job != NULL) {
-                printf("[%d] %d\n", job->job_id, (int)leader_pid);
+                printf("[%d] %d\n", job->job_id, (int)last_pid);
                 fflush(stdout);
             }
             free(pids);
             return 0;
         }
 
-        size_t index;
-
-        for (index = 0; index < child_count; index++) {
-            int status = wait_for_child(pids[index]);
-            if (index == child_count - 1) {
-                final_status = status;
-            }
-        }
+        int final_status = wait_for_job(job);
+        free(pids);
+        return final_status;
     }
 
     free(pids);
-    return final_status;
+    return 1;
 }

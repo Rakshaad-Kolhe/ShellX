@@ -1,4 +1,9 @@
+#define _POSIX_C_SOURCE 200809L
+
 #include "executor.h"
+
+
+#include "signals.h"
 
 #include <errno.h>
 #include <fcntl.h>
@@ -103,7 +108,7 @@ static int setup_child_stdio(int input_fd, int output_fd)
 }
 
 pid_t spawn_child(const Command *command, int input_fd, int output_fd,
-                  int close_fd)
+                  int close_fd, pid_t pgid)
 {
     pid_t child_pid;
 
@@ -118,6 +123,12 @@ pid_t spawn_child(const Command *command, int input_fd, int output_fd,
     }
 
     if (child_pid == 0) {
+        pid_t my_pid = getpid();
+        pid_t target_pgid = (pgid == 0) ? my_pid : pgid;
+
+        setpgid(0, target_pgid);
+        setup_child_signals();
+
         if (setup_child_stdio(input_fd, output_fd) != 0) {
             close_if_open(input_fd);
             close_if_open(output_fd);
@@ -138,6 +149,9 @@ pid_t spawn_child(const Command *command, int input_fd, int output_fd,
         _exit(127);
     }
 
+    pid_t target_pgid = (pgid == 0) ? child_pid : pgid;
+    setpgid(child_pid, target_pgid);
+
     return child_pid;
 }
 
@@ -149,7 +163,7 @@ int wait_for_child(pid_t pid)
         return 1;
     }
 
-    while (waitpid(pid, &status, 0) == -1) {
+    while (waitpid(pid, &status, WUNTRACED) == -1) {
         if (errno != EINTR) {
             perror("waitpid");
             return 1;
@@ -170,21 +184,23 @@ int wait_for_child(pid_t pid)
 int execute_command(const Command *command)
 {
     pid_t child_pid;
+    char *cmd_str;
+    Job *job;
 
     if (command == NULL || command->arg_count == 0 || command->args[0] == NULL) {
         return 1;
     }
 
-    child_pid = spawn_child(command, -1, -1, -1);
+    child_pid = spawn_child(command, -1, -1, -1, 0);
     if (child_pid < 0) {
         return 1;
     }
 
-    if (command->run_in_background) {
-        char *cmd_str = format_command_string(command);
-        Job *job = add_job(child_pid, child_pid, cmd_str, 1);
-        free(cmd_str);
+    cmd_str = format_command_string(command);
+    job = add_job(child_pid, child_pid, cmd_str, command->run_in_background);
+    free(cmd_str);
 
+    if (command->run_in_background) {
         if (job != NULL) {
             printf("[%d] %d\n", job->job_id, (int)child_pid);
             fflush(stdout);
@@ -192,5 +208,5 @@ int execute_command(const Command *command)
         return 0;
     }
 
-    return wait_for_child(child_pid);
+    return wait_for_job(job);
 }
