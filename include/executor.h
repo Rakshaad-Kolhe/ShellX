@@ -1,14 +1,10 @@
 #ifndef SHELLX_EXECUTOR_H
 #define SHELLX_EXECUTOR_H
 
+#include "jobs.h"
 #include "pipeline.h"
 
 #include <sys/types.h>
-
-/*
- * Generate an incrementing 1-based job ID for background commands.
- */
-int get_next_job_id(void);
 
 /*
  * Close a file descriptor if it is not -1.

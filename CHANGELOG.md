@@ -20,9 +20,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 - **Asynchronous Background Process Execution (`&`)**: Added support for executing single commands (`cmd &`) and multi-stage pipelines (`cmd1 | cmd2 &`) asynchronously without blocking the interactive prompt.
-- **Job ID & PID Output**: Formatted background launch output to display `[job_id] <pid>` (e.g., `[1] 12345`).
-- **Shared Job Generator**: Added `get_next_job_id()` helper in `include/executor.h` and `src/executor.c` to generate sequential 1-based job IDs.
-- **Automated Unit Tests**: Added unit tests in `tests/test_executor.c` and `tests/test_pipeline.c` verifying immediate background process launch.
+- **Internal Job Management Subsystem**: Implemented encapsulated Job Table in `include/jobs.h` and `src/jobs.c` featuring `Job` structure tracking sequential `job_id`, `pgid`, `pid`, `command`, `state`, and `is_background`.
+- **Job Lifecycle APIs**: Added `init_job_table()`, `add_job()`, `find_job_by_id()`, `find_job_by_pid()`, `remove_job_by_id()`, `remove_completed_jobs()`, and `destroy_job_table()`.
+- **Command Line Formatting**: Added `format_command_string()` to reconstruct `Command` AST pipelines into readable command strings stored inside `Job` records.
+- **Automated Unit Test Suite**: Added `tests/test_jobs.c` providing 100% pass rate and zero Valgrind leaks for job table operations.
 
 ---
 

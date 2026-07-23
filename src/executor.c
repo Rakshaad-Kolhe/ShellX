@@ -3,17 +3,10 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <sys/types.h>
 #include <sys/wait.h>
 #include <unistd.h>
-
-int get_next_job_id(void)
-{
-    static int current_job_id = 0;
-
-    current_job_id++;
-    return current_job_id;
-}
 
 void close_if_open(int fd)
 {
@@ -188,8 +181,14 @@ int execute_command(const Command *command)
     }
 
     if (command->run_in_background) {
-        printf("[%d] %d\n", get_next_job_id(), (int)child_pid);
-        fflush(stdout);
+        char *cmd_str = format_command_string(command);
+        Job *job = add_job(child_pid, child_pid, cmd_str, 1);
+        free(cmd_str);
+
+        if (job != NULL) {
+            printf("[%d] %d\n", job->job_id, (int)child_pid);
+            fflush(stdout);
+        }
         return 0;
     }
 

@@ -6,12 +6,13 @@ This document provides a comprehensive technical overview of the **ShellX** arch
 
 ## Architecture Overview
 
-ShellX is structured into four decoupled subsystems:
+ShellX is structured into five decoupled subsystems:
 
 1. **Parser & AST Builder**: Converts raw user input strings into a sanitized linked list of `Command` abstractions.
 2. **Built-in Command Engine**: Handles shell-internal state modifications (`cd`, `exit`) directly inside the parent process.
 3. **Single Process Execution Engine**: Manages process creation (`fork`), standard stream manipulation (`dup2`), program execution (`execvp`), and parent synchronization (`waitpid`).
 4. **Pipeline Inter-Process Communication (IPC) Subsystem**: Chains arbitrary numbers of child processes together via POSIX pipes (`pipe`).
+5. **Job Management Subsystem**: Maintains an in-memory Job Table tracking background processes and pipelines across shell sessions.
 
 ---
 
@@ -66,7 +67,7 @@ pid_t spawn_child(const Command *command, int input_fd, int output_fd, int close
 5. **Failure Fallback**: If `execvp` fails (e.g., command not found), perror prints the error and `_exit(127)` terminates the child process immediately.
 
 ### Exit Status Collection
-`execute_command` synchronizes with the child process using `waitpid`:
+`execute_command` synchronizes with foreground child processes using `wait_for_child`:
 - `WIFEXITED(status)`: Returns `WEXITSTATUS(status)`.
 - `WIFSIGNALED(status)`: Returns `128 + WTERMSIG(status)` in accordance with standard POSIX conventions.
 
@@ -88,25 +89,45 @@ Stage 1 (cmd1)          Stage 2 (cmd2)          Stage 3 (cmd3)
                                                      Read from prev_read_fd
 ```
 
-### Step-by-Step Pipeline Execution Flow
-1. **Command Counting**: `count_commands` calculates total pipeline stages and allocates a `pids` array.
-2. **Pipeline Loop**: For each `Command` node in the linked list:
-   - If `command->next != NULL`, create a new POSIX pipe `pipe(pipe_fds)`.
-   - Call `spawn_child` passing `previous_read_fd` as stdin and `pipe_fds[1]` as stdout. Pass `pipe_fds[0]` as `close_fd` so the child closes the unneeded pipe read end.
-   - In the parent process:
-     - Close `previous_read_fd` (the input pipe end for this stage).
-     - Close `pipe_fds[1]` (the write pipe end for this stage).
-     - Save `pipe_fds[0]` as `previous_read_fd` for the next stage.
-3. **Parent Synchronization**: After spawning all stages, the parent loops over the `pids` array and calls `wait_for_child` on each PID.
-4. **Exit Status propagation**: The exit status of the **final** pipeline stage is collected and returned as the pipeline exit status, fulfilling POSIX standard behavior.
+---
+
+## 4. Job Management Subsystem
+
+The Job Management subsystem resides in [src/jobs.c](file:///wsl.localhost/Ubuntu/home/rakshaad/projects/ShellX/src/jobs.c) and [include/jobs.h](file:///wsl.localhost/Ubuntu/home/rakshaad/projects/ShellX/include/jobs.h).
+
+### Data Structure: `Job`
+
+```c
+typedef enum JobState {
+    JOB_RUNNING,
+    JOB_STOPPED,
+    JOB_DONE
+} JobState;
+
+typedef struct Job {
+    int job_id;               /* 1-based sequential job ID */
+    pid_t pgid;               /* Process Group ID (leader PID) */
+    pid_t pid;                /* Leader process PID */
+    char *command;            /* Reconstructed command string */
+    JobState state;           /* JobState enum */
+    int is_background;        /* 1 for background job, 0 for foreground */
+    struct Job *next;         /* Pointer to next job in internal list */
+} Job;
+```
+
+### Job Table Responsibilities
+- `init_job_table()`: Initializes the internal job list and resets job ID counter to 1.
+- `add_job(pid, pgid, command_str, is_bg)`: Allocates a new `Job` struct, assigns a sequential 1-based `job_id`, formats the command string (`format_command_string`), and registers it in the internal job table.
+- `find_job_by_id(job_id)` / `find_job_by_pid(pid)`: Searches the internal job table by job ID or leader PID.
+- `remove_job_by_id(job_id)` / `remove_completed_jobs()`: Removes and frees specified or completed job nodes.
+- `destroy_job_table()`: Frees all allocated jobs and command strings upon shell shutdown for zero Valgrind memory leaks.
 
 ---
 
-## 4. Current System Limitations
+## 5. Current System Limitations
 
-The current implementation (`v0.1.0`) is deliberately constrained to core systems mechanisms. Known boundaries include:
+The current implementation (`v0.3.0-alpha`) tracks background jobs internally in the Job Table. Future job control capabilities scheduled for `v0.3.0` include:
 
-- **Line Editing**: Uses `fgets` on standard stdin; advanced GNU Readline key-bindings (arrow navigation, line editing) are not present.
-- **Built-in Scope**: Implements `cd` and `exit`. Environment variable setting (`export`), aliases, and job commands (`fg`/`bg`) are deferred.
-- **Job Control & Signals**: `run_in_background` flag is populated when trailing `&` is parsed, but process group assignment (`setpgid`), terminal control transfers (`tcsetpgrp`), and async background monitoring (`SIGCHLD`) are scheduled for `v0.3.0`.
-- **Fixed Argument Limit**: Commands are limited to `SHELLX_MAX_ARGS` (128 arguments).
+- **User-facing Job Built-ins**: `jobs`, `fg`, and `bg` CLI commands.
+- **Process Groups & Terminal Control**: `setpgid` process group creation and `tcsetpgrp` terminal ownership transfers.
+- **Asynchronous Child Reaping**: `SIGCHLD` signal handler to automatically reap completed background processes and prevent zombie accumulation.
