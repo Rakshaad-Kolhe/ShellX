@@ -6,6 +6,11 @@
 #include <sys/types.h>
 
 /*
+ * Close a file descriptor if it is not -1.
+ */
+void close_if_open(int fd);
+
+/*
  * Execute one foreground command.
  * The command is borrowed and must not be modified or freed.
  * Returns the command's exit status when available, or nonzero on failure.
@@ -20,5 +25,12 @@ int execute_command(const Command *command);
  */
 pid_t spawn_child(const Command *command, int input_fd, int output_fd,
                   int close_fd);
+
+/*
+ * Synchronize with a child process by PID and decode its exit status.
+ * Handles EINTR signal interruptions and returns exit status (0-255, 127 on error,
+ * or 128 + signal on termination).
+ */
+int wait_for_child(pid_t pid);
 
 #endif

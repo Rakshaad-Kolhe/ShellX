@@ -6,7 +6,6 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <sys/types.h>
-#include <sys/wait.h>
 #include <unistd.h>
 
 static int validate_commands(const Command *commands)
@@ -39,38 +38,6 @@ static size_t count_commands(const Command *commands)
     }
 
     return count;
-}
-
-static int wait_for_child(pid_t pid, int *status)
-{
-    while (waitpid(pid, status, 0) == -1) {
-        if (errno != EINTR) {
-            perror("waitpid");
-            return 0;
-        }
-    }
-
-    return 1;
-}
-
-static int decode_wait_status(int status)
-{
-    if (WIFEXITED(status)) {
-        return WEXITSTATUS(status);
-    }
-
-    if (WIFSIGNALED(status)) {
-        return 128 + WTERMSIG(status);
-    }
-
-    return 1;
-}
-
-static void close_if_open(int fd)
-{
-    if (fd != -1) {
-        close(fd);
-    }
 }
 
 int execute_pipeline(const Command *commands)
@@ -138,29 +105,18 @@ int execute_pipeline(const Command *commands)
         size_t index;
 
         for (index = 0; index < child_count; index++) {
-            int status;
-
-            if (!wait_for_child(pids[index], &status)) {
-                execution_failed = 1;
-                continue;
-            }
-
+            int status = wait_for_child(pids[index]);
             if (index == child_count - 1) {
-                final_status = decode_wait_status(status);
+                final_status = status;
             }
         }
-    }
-
-    if (execution_failed) {
-        if (child_count == 0) {
-            free(pids);
-            return 1;
-        }
-
-        free(pids);
-        return 1;
     }
 
     free(pids);
+
+    if (execution_failed) {
+        return 1;
+    }
+
     return final_status;
 }

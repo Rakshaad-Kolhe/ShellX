@@ -3,7 +3,9 @@
 #include <assert.h>
 #include <signal.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
 
 static Command make_command(char *const argv[], size_t arg_count)
 {
@@ -27,6 +29,63 @@ static Command make_command(char *const argv[], size_t arg_count)
 static void link_commands(Command *left, Command *right)
 {
     left->next = right;
+}
+
+static void make_temp_path(char *buffer, size_t buffer_size, const char *suffix)
+{
+    int written;
+
+    written = snprintf(buffer, buffer_size, "/tmp/shellx_test_pipeline_%ld_%s",
+                       (long)getpid(), suffix);
+    assert(written > 0);
+    assert((size_t)written < buffer_size);
+}
+
+static void write_text_file(const char *path, const char *contents)
+{
+    FILE *file = fopen(path, "wb");
+
+    assert(file != NULL);
+    assert(fputs(contents, file) != EOF);
+    assert(fclose(file) == 0);
+}
+
+static char *read_text_file(const char *path)
+{
+    FILE *file;
+    long file_size;
+    char *buffer;
+    size_t bytes_read;
+
+    file = fopen(path, "rb");
+    assert(file != NULL);
+    assert(fseek(file, 0, SEEK_END) == 0);
+    file_size = ftell(file);
+    assert(file_size >= 0);
+    assert(fseek(file, 0, SEEK_SET) == 0);
+
+    buffer = malloc((size_t)file_size + 1);
+    assert(buffer != NULL);
+
+    bytes_read = fread(buffer, 1, (size_t)file_size, file);
+    assert(bytes_read == (size_t)file_size);
+    buffer[file_size] = '\0';
+
+    assert(fclose(file) == 0);
+    return buffer;
+}
+
+static void assert_file_contents(const char *path, const char *expected_contents)
+{
+    char *actual_contents = read_text_file(path);
+
+    assert(strcmp(actual_contents, expected_contents) == 0);
+    free(actual_contents);
+}
+
+static void remove_file_if_present(const char *path)
+{
+    unlink(path);
 }
 
 static void assert_command_unchanged(const Command *command,
@@ -172,6 +231,95 @@ static void test_final_command_signal_termination_returns_128_plus_sigterm(void)
     assert(execute_pipeline(&first) == 128 + SIGTERM);
 }
 
+static void test_pipeline_input_redirection(void)
+{
+    char input_path[256];
+    char *first_argv[] = {"cat"};
+    char *second_argv[] = {"grep", "target"};
+    Command first = make_command(first_argv, 1);
+    Command second = make_command(second_argv, 2);
+
+    make_temp_path(input_path, sizeof(input_path), "pipe_in.txt");
+    write_text_file(input_path, "ignore\ntarget_data\nother\n");
+
+    first.input_path = input_path;
+    link_commands(&first, &second);
+
+    assert(execute_pipeline(&first) == 0);
+
+    remove_file_if_present(input_path);
+}
+
+static void test_pipeline_output_redirection(void)
+{
+    char output_path[256];
+    char *first_argv[] = {"printf", "alpha\nbeta\ngamma\n"};
+    char *second_argv[] = {"grep", "beta"};
+    Command first = make_command(first_argv, 2);
+    Command second = make_command(second_argv, 2);
+
+    make_temp_path(output_path, sizeof(output_path), "pipe_out.txt");
+
+    second.output_path = output_path;
+    second.append_output = 0;
+    link_commands(&first, &second);
+
+    assert(execute_pipeline(&first) == 0);
+    assert_file_contents(output_path, "beta\n");
+
+    remove_file_if_present(output_path);
+}
+
+static void test_pipeline_append_redirection(void)
+{
+    char output_path[256];
+    char *first_argv[] = {"printf", "line1\n"};
+    char *second_argv[] = {"grep", "line1"};
+    Command first = make_command(first_argv, 2);
+    Command second = make_command(second_argv, 2);
+
+    make_temp_path(output_path, sizeof(output_path), "pipe_append.txt");
+    write_text_file(output_path, "initial\n");
+
+    second.output_path = output_path;
+    second.append_output = 1;
+    link_commands(&first, &second);
+
+    assert(execute_pipeline(&first) == 0);
+    assert_file_contents(output_path, "initial\nline1\n");
+
+    remove_file_if_present(output_path);
+}
+
+static void test_pipeline_mixed_input_and_output_redirection(void)
+{
+    char input_path[256];
+    char output_path[256];
+    char *first_argv[] = {"cat"};
+    char *second_argv[] = {"grep", "match"};
+    char *third_argv[] = {"head", "-n", "1"};
+    Command first = make_command(first_argv, 1);
+    Command second = make_command(second_argv, 2);
+    Command third = make_command(third_argv, 3);
+
+    make_temp_path(input_path, sizeof(input_path), "mixed_in.txt");
+    make_temp_path(output_path, sizeof(output_path), "mixed_out.txt");
+    write_text_file(input_path, "match_one\nskip\nmatch_two\n");
+
+    first.input_path = input_path;
+    third.output_path = output_path;
+    third.append_output = 0;
+
+    link_commands(&first, &second);
+    link_commands(&second, &third);
+
+    assert(execute_pipeline(&first) == 0);
+    assert_file_contents(output_path, "match_one\n");
+
+    remove_file_if_present(input_path);
+    remove_file_if_present(output_path);
+}
+
 static void test_borrowed_command_list_is_not_mutated(void)
 {
     char *first_argv[] = {"printf", "hello\n"};
@@ -231,6 +379,10 @@ int main(void)
     test_three_command_pipeline_returns_zero();
     test_nonexistent_final_command_returns_127();
     test_final_command_signal_termination_returns_128_plus_sigterm();
+    test_pipeline_input_redirection();
+    test_pipeline_output_redirection();
+    test_pipeline_append_redirection();
+    test_pipeline_mixed_input_and_output_redirection();
     test_borrowed_command_list_is_not_mutated();
 
     printf("All pipeline tests passed.\n");

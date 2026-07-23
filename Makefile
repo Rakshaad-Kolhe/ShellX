@@ -47,7 +47,7 @@ $(BUILD_DIR)/executor.o: src/executor.c include/executor.h include/pipeline.h | 
 $(BUILD_DIR)/builtins.o: src/builtins.c include/builtins.h include/pipeline.h | $(BUILD_DIR)
 	$(CC) $(CFLAGS) $(CPPFLAGS) -c $< -o $@
 
-$(BUILD_DIR)/pipeline.o: src/pipeline.c include/pipeline.h | $(BUILD_DIR)
+$(BUILD_DIR)/pipeline.o: src/pipeline.c include/pipeline.h include/executor.h | $(BUILD_DIR)
 	$(CC) $(CFLAGS) $(CPPFLAGS) -c $< -o $@
 
 $(BUILD_DIR)/test_parser.o: tests/test_parser.c include/parser.h include/pipeline.h | $(BUILD_DIR)
