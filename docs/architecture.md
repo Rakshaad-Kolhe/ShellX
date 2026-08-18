@@ -1,116 +1,105 @@
-# ShellX Technical Architecture
+# ShellX Subsystem Architecture
 
-This document provides a comprehensive technical overview of the **ShellX** architecture, detailing the design, data structures, and execution flow of its core subsystems.
-
----
-
-## Architecture Overview
-
-ShellX is structured into decoupled, modular subsystems:
-
-1. **Lexical Scanner & Quoting Engine (`lexer.c`)**: Tokenizes raw user input with full state tracking for single quotes (`'`), double quotes (`"`), backslash escapes (`\`), and operators (`|`, `<`, `>`, `>>`, `&`).
-2. **Expansion Engine (`expansion.c`)**: Evaluates environment variables (`$VAR`), special shell parameters (`$?`, `$$`), and tildes (`~`, `~/...`) within an explicit execution context (`ShellContext`).
-3. **Parser & AST Builder (`parser.c`)**: Converts validated token streams into a sanitized linked list of `Command` abstractions.
-4. **Built-in Command Engine (`builtins.c`)**: Executes shell state modification commands (`cd`, `exit`, `jobs`, `fg`, `bg`, `export`, `unset`, `env`) directly inside the shell process or within pipeline subshells.
-5. **Process Execution Engine (`executor.c`)**: Manages process creation (`fork`), stream redirection (`dup2`), binary execution (`execvp`), and parent synchronization (`waitpid`).
-6. **Pipeline Inter-Process Communication (IPC) Subsystem (`pipeline.c`)**: Chains arbitrary numbers of child processes together using an iterative rolling POSIX pipe model.
-7. **Job Management & Signal Handling Subsystem (`jobs.c`, `signals.c`)**: Tracks process groups, manages terminal control (`tcsetpgrp`), and provides asynchronous zombie reaping (`SIGCHLD`).
+This document provides a technical overview of **ShellX**'s core subsystems, data structures, and architectural separation of concerns.
 
 ---
 
-## 1. Lexical Scanner & Tokenization (`lexer.c`)
+## Architectural Subsystem Overview
 
-The scanner resides in `include/lexer.h` and `src/lexer.c`.
-
-### Data Structures: `Token` and `TokenList`
-
-```c
-typedef enum TokenType {
-    TOKEN_WORD,
-    TOKEN_PIPE,         /* | */
-    TOKEN_REDIRECT_IN,  /* < */
-    TOKEN_REDIRECT_OUT, /* > */
-    TOKEN_APPEND_OUT,   /* >> */
-    TOKEN_AMPERSAND     /* & */
-} TokenType;
-
-typedef struct Token {
-    TokenType type;
-    char *value;
-} Token;
-
-typedef struct TokenList {
-    Token *tokens;
-    size_t count;
-    size_t capacity;
-} TokenList;
+```
+                      +---------------------------------------+
+                      |         GNU Readline REPL             |
+                      | (Line editing & persistent history)   |
+                      +-------------------+-------------------+
+                                          |
+                                          v
+                      +---------------------------------------+
+                      |     Lexical Scanner & Expansion       |
+                      |   (Quotes, Escapes, $VAR, $?, $$)     |
+                      +-------------------+-------------------+
+                                          | Token stream
+                                          v
+                      +---------------------------------------+
+                      |           Command Parser              |
+                      |  (AST Pipeline linked list builder)   |
+                      +-------------------+-------------------+
+                                          | Command AST
+                                          v
+                      +---------------------------------------+
+                      |          Pipeline Executor            |
+                      |   (Rolling pipe fd IPC orchestrator)  |
+                      +---------+-------------------+---------+
+                                |                   |
+               +----------------+                   +----------------+
+               | Child subshell                     | Parent process
+               v                                    v
++-------------------------------+   +-------------------------------+
+|       Child Process           |   |       Built-in Engine         |
+|  - File Redirection (<, >, >>)|   |  - cd (syncs PWD)             |
+|  - Binary Execution (execvp)  |   |  - export, unset, env         |
+|  - Built-in (pipeline subshell|   |  - jobs, fg, bg, exit         |
++-------------------------------+   +-------------------------------+
+                                                    ^
+                                                    |
+                                    +---------------+---------------+
+                                    |   Job Control & Signal Engine |
+                                    | - tcsetpgrp() foreground ctrl |
+                                    | - SIGCHLD async zombie reaping|
+                                    | - SIGINT & SIGTSTP trapping   |
+                                    +-------------------------------+
 ```
 
-### Scanning States & Rules
-1. **Single-Quote State (`'...'`)**: All characters within single quotes are preserved strictly as literal data. Variable interpolation (`$`), escapes (`\`), and operator recognition are completely disabled.
-2. **Double-Quote State (`"..."`)**: Preserves spaces and operators literally while performing variable expansion (`$VAR`, `$?`, `$$`) and respecting escape sequences (`\$`, `\"`, `\\`).
-3. **Backslash Escapes (`\`)**:
-  - Outside quotes: Quotes the immediate next character literally, stripping the backslash.
-  - Inside double quotes: Escapes `$`, `"`, `\`, and `\n`.
-4. **Tilde Expansion**: Leading `~` or `~/` at word start resolves to `$HOME` using `get_tilde_expansion()`.
-5. **Operator Recognition**: Unquoted `|`, `<`, `>`, `>>`, and `&` emit distinct token types. Quoted or escaped instances emit `TOKEN_WORD` tokens, preventing operator spoofing.
+---
+
+## 1. Lexical Scanner & Expansion Engine (`lexer.c`, `expansion.c`)
+
+### Responsibilities
+- Scans raw input strings into discrete tokens (`TOKEN_WORD`, `TOKEN_PIPE`, `TOKEN_REDIRECT_IN`, `TOKEN_REDIRECT_OUT`, `TOKEN_REDIRECT_APPEND`, `TOKEN_BACKGROUND`).
+- Preserves literal characters and disables operator tokenization inside single quotes (`'...'`).
+- Handles double-quote state (`"..."`): expands variables (`$VAR`, `$?`, `$$`), handles escape sequences (`\$`, `\"`, `\\`), and shields spaces and operators.
+- Implements backslash escaping outside and inside double quotes. Inside double quotes, backslash retains its special escape meaning exclusively when preceding `$`, `"`, or `\\`. All other backslash sequences (e.g. `\n`, `\a`) are preserved literally, adhering to traditional shell quoting conventions.
+- Performs tilde expansion (`~`, `~/...`) resolving leading `~` to `$HOME`.
+- Validates identifier syntax for environment operations (`[a-zA-Z_][a-zA-Z0-9_]*`).
 
 ---
 
-## 2. Parameter Expansion & Shell Context (`expansion.c`)
+## 2. Command Line Parser (`parser.c`)
 
-The expansion module resides in `include/expansion.h` and `src/expansion.c`.
-
-### Shell Context Structure
-
-```c
-typedef struct ShellContext {
-    int last_exit_status;  /* Exit status of previous foreground command */
-    pid_t shell_pid;       /* PID of the running ShellX process */
-} ShellContext;
-```
-
-### Parameter Expansion Logic
-- **`$?`**: Formatted as a base-10 decimal string representation of `context->last_exit_status`.
-- **`$$`**: Formatted as a base-10 decimal string representation of `context->shell_pid`.
-- **`$VAR` / `${VAR}`**: Looked up via `getenv(name)`. Unset variables expand to an empty string `""`.
-- **Identifier Validation (`is_valid_identifier`)**: Validates that variable names conform to `[a-zA-Z_][a-zA-Z0-9_]*`.
+### Responsibilities
+- Consumes tokens produced by `tokenize()` into a linked list of `Command` structures.
+- Populates `args[]`, `input_path`, `output_path`, `append_output`, and `is_background`.
+- Enforces syntax validation: flags dangling pipes, missing redirection targets, and invalid syntax with clear error messages.
+- Ensures clean memory lifecycle: `free_command_pipeline()` frees all AST nodes and dynamic argument strings.
 
 ---
 
-## 3. Parser & Command AST Representation (`parser.c`)
+## 3. Pipeline IPC Executor (`pipeline.c`, `executor.c`)
 
-The parser consumes tokens produced by the lexer and builds a singly linked list of `Command` structures:
-
-```c
-typedef struct Command {
-    char *args[SHELLX_MAX_ARGS];  /* Null-terminated argument array */
-    size_t arg_count;             /* Number of valid positional arguments */
-    char *input_path;             /* Path for '<' redirection or NULL */
-    char *output_path;            /* Path for '>' or '>>' redirection or NULL */
-    int append_output;            /* 1 for '>>' append mode, 0 for '>' truncate */
-    int run_in_background;        /* 1 if command line terminates with '&' */
-    struct Command *next;         /* Pointer to next command in pipeline, or NULL */
-} Command;
-```
-
-### Memory Ownership Transfer
-The parser transfers allocated string ownership from `TokenList` directly into `command->args` and redirection paths by setting token values to `NULL`, eliminating redundant string allocations.
+### Responsibilities
+- Executes multi-stage pipelines (`cmd1 | cmd2 | cmd3`) using a rolling pipe file descriptor pair model.
+- Prevents file descriptor leaks by closing unused pipe ends in both parent and child processes.
+- Isolates child pipelines into dedicated process groups (`setpgid`).
+- Supports subshell execution of built-in commands when chained in pipelines (`spawn_child`).
 
 ---
 
-## 4. Built-in Environment & State Commands (`builtins.c`)
+## 4. Built-in Command Subsystem (`builtins.c`)
 
-### Supported Built-ins
-- **`export [NAME[=VALUE] ...]`**: Validates identifier syntax and calls `setenv(name, value, 1)`. When invoked without arguments, prints exported variables.
-- **`unset [NAME ...]`**: Validates identifier syntax and calls `unsetenv(name)`.
-- **`env`**: Dumps all active variables from `environ`. Rejects extraneous positional arguments.
-- **`cd [PATH]`**: Updates current directory and automatically synchronizes the `PWD` environment variable via `setenv("PWD", cwd, 1)`.
-- **`jobs`, `fg`, `bg`, `exit`**: Manage job table state, foreground terminal handoff, and clean shell shutdown.
+### Built-in Catalog
+- **`cd [DIR]`**: Changes working directory and dynamically updates `PWD` via `setenv("PWD", cwd, 1)`.
+- **`export [NAME[=VALUE] ...]`**: Sets environment variables or lists exported variables with `is_valid_identifier` validation.
+- **`unset [NAME ...]`**: Removes environment variables via `unsetenv`.
+- **`env`**: Dumps all active environment entries from `environ` (rejects positional arguments).
+- **`jobs`**: Displays active, stopped, and background jobs.
+- **`fg [JOB_ID]`**: Brings a background or stopped job to the foreground and hands over terminal ownership via `tcsetpgrp()`.
+- **`bg [JOB_ID]`**: Resumes a stopped job in the background via `kill(-pgid, SIGCONT)`.
+- **`exit`**: Gracefully terminates the shell session.
 
 ---
 
-## 5. Process Execution & Rolling Pipeline IPC
+## 5. POSIX Job Control & Signal Management (`jobs.c`, `signals.c`)
 
-- **Iterative Rolling Pipeline**: Employs an iterative loop keeping at most 2 pipe descriptors active simultaneously in the parent process.
-- **Pipeline Subshell Execution**: `spawn_child` detects built-in commands and executes them directly within the child subshell via `execute_builtin`, enabling commands like `env | grep VAR` or `export | sort`.
+### Responsibilities
+- Tracks process groups and lifecycle states (`JOB_RUNNING`, `JOB_STOPPED`, `JOB_COMPLETED`).
+- Non-blocking `SIGCHLD` handler uses `waitpid(-1, &status, WNOHANG | WUNTRACED | WCONTINUED)` to reap terminated children and track stopped/continued states without deadlocking the interactive loop.
+- Manages terminal foreground process group ownership via `tcsetpgrp(STDIN_FILENO, pgid)` and safely reclaims terminal ownership when foreground jobs terminate or stop.
