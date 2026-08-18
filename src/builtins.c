@@ -1,9 +1,11 @@
 #define _POSIX_C_SOURCE 200809L
 
 #include "builtins.h"
+#include "alias.h"
 #include "expansion.h"
 #include "jobs.h"
 
+#include <ctype.h>
 #include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -244,6 +246,77 @@ static int execute_env(const Command *command)
     return 0;
 }
 
+static int execute_alias(const Command *command)
+{
+    if (command->arg_count == 1) {
+        print_aliases();
+        return 0;
+    }
+
+    int status = 0;
+    for (size_t i = 1; i < command->arg_count; i++) {
+        const char *arg = command->args[i];
+        const char *equals = strchr(arg, '=');
+
+        if (equals != NULL) {
+            size_t name_len = (size_t)(equals - arg);
+            if (name_len == 0) {
+                fprintf(stderr, "shellx: alias: `%s': not a valid identifier\n", arg);
+                status = 1;
+                continue;
+            }
+
+            char name[256];
+            if (name_len >= sizeof(name)) {
+                fprintf(stderr, "shellx: alias: `%s': identifier too long\n", arg);
+                status = 1;
+                continue;
+            }
+
+            memcpy(name, arg, name_len);
+            name[name_len] = '\0';
+
+            if (!is_valid_identifier(name)) {
+                fprintf(stderr, "shellx: alias: `%s': not a valid identifier\n", arg);
+                status = 1;
+                continue;
+            }
+
+            const char *value = equals + 1;
+            if (!set_alias(name, value)) {
+                fprintf(stderr, "shellx: alias: failed to set `%s'\n", name);
+                status = 1;
+            }
+        } else {
+            if (!print_alias(arg)) {
+                fprintf(stderr, "shellx: alias: %s: not found\n", arg);
+                status = 1;
+            }
+        }
+    }
+
+    return status;
+}
+
+static int execute_unalias(const Command *command)
+{
+    if (command->arg_count == 1) {
+        fprintf(stderr, "shellx: unalias: usage: unalias name ...\n");
+        return 1;
+    }
+
+    int status = 0;
+    for (size_t i = 1; i < command->arg_count; i++) {
+        const char *name = command->args[i];
+        if (!remove_alias(name)) {
+            fprintf(stderr, "shellx: unalias: %s: not found\n", name);
+            status = 1;
+        }
+    }
+
+    return status;
+}
+
 int is_builtin(const Command *command)
 {
     if (command == NULL || command->arg_count == 0 || command->args[0] == NULL) {
@@ -257,7 +330,9 @@ int is_builtin(const Command *command)
            strcmp(command->args[0], "bg") == 0 ||
            strcmp(command->args[0], "export") == 0 ||
            strcmp(command->args[0], "unset") == 0 ||
-           strcmp(command->args[0], "env") == 0;
+           strcmp(command->args[0], "env") == 0 ||
+           strcmp(command->args[0], "alias") == 0 ||
+           strcmp(command->args[0], "unalias") == 0;
 }
 
 int execute_builtin(const Command *command, int *should_exit)
@@ -279,7 +354,7 @@ int execute_builtin(const Command *command, int *should_exit)
 
     if (strcmp(command->args[0], "jobs") == 0) {
         return execute_jobs();
-      }
+    }
 
     if (strcmp(command->args[0], "fg") == 0) {
         return execute_fg(command);
@@ -299,7 +374,15 @@ int execute_builtin(const Command *command, int *should_exit)
 
     if (strcmp(command->args[0], "env") == 0) {
         return execute_env(command);
-      }
+    }
+
+    if (strcmp(command->args[0], "alias") == 0) {
+        return execute_alias(command);
+    }
+
+    if (strcmp(command->args[0], "unalias") == 0) {
+        return execute_unalias(command);
+    }
 
     return 1;
 }

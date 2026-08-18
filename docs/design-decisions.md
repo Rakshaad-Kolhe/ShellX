@@ -1,116 +1,68 @@
-# Systems Design Decisions & Rationale
+# ShellX Design Decisions & Trade-offs
 
-This document documents the key architectural choices, engineering trade-offs, and design rationales behind **ShellX**.
-
----
-
-## 1. Unified Quote-Aware Tokenization & Expansion
-
-### Decision
-Implement a unified, stateful lexical scanner (`src/lexer.c`) that performs quote stripping, backslash escape resolution, parameter expansion, and operator recognition in a single coherent scanning pipeline (`Input -> Lexer -> Parser -> AST -> Executor`).
-
-### Alternatives Considered
-- **Ad-hoc Pre-processing / Regex Replacement**: Replacing `$VAR` or stripping quotes using global string search-and-replace prior to tokenization.
-- **Post-parse AST Expansion**: Building AST first and expanding variables in command arguments during execution.
-
-### Rationale
-- **Operator Shielding**: Quoted or escaped operators (`echo 'a | b'`, `echo ">"`, `echo foo\&bar`) must be recognized strictly as literal text (`TOKEN_WORD`), not as control operators. Pre-processing strings blindly or tokenizing before quoting leads to syntax corruption and command injection vulnerabilities.
-- **Accurate Quoting Semantics**: POSIX quoting rules dictate that single quotes disable all expansion, double quotes enable variable expansion and specific backslash escapes (`\$`, `\"`, `\\`), and backslashes quote individual characters. A unified scanner maintains state accurately across adjacent quoted and unquoted substrings (e.g., `"Hello "'$USER'!`).
+This document outlines key architectural design decisions, rationale, trade-offs, and invariants enforced across **ShellX**.
 
 ---
 
-## 2. Explicit Shell Context for Special Parameters
+## 1. Startup Configuration vs General Scripting Engine
+
+### Context
+Shells require startup configuration (`~/.shellxrc`) to initialize environment variables, aliases, and prompts.
 
 ### Decision
-Encapsulate runtime shell parameters (`last_exit_status`, `shell_pid`) in a lightweight `ShellContext` structure passed explicitly to the parser and expansion engine:
-
-```c
-typedef struct ShellContext {
-    int last_exit_status;
-    pid_t shell_pid;
-} ShellContext;
-```
+Implement a dedicated, configuration-specific line parser (`src/config.c`) rather than treating `.shellxrc` as a generic executable shell script.
 
 ### Rationale
-- **Reentrant & Deterministic Testing**: Parser and expansion functions remain pure and testable without relying on global mutable state or live process hooks.
-- **Clean Execution Interface**: The REPL loop in `main()` captures the exit status of commands/pipelines and updates `context.last_exit_status` for the subsequent prompt cycle.
+- **Security & Predictability**: Prevents executing arbitrary commands (`system()`, `popen()`, `/bin/sh -c`) during startup.
+- **Maintainability**: Avoids entangling startup initialization with incomplete scripting control flow grammar (`if`, `while`, `for`).
+- **Resilience**: Malformed lines report file and line numbers without aborting initialization or corrupting state.
 
 ---
 
-## 3. Strict POSIX Variable Identifier Validation
+## 2. Alias Table Architecture & Memory Ownership
+
+### Context
+Aliases map custom shorthand names to replacement strings and must persist across interactive commands.
 
 ### Decision
-Enforce strict identifier validation (`is_valid_identifier`) conforming to `[a-zA-Z_][a-zA-Z0-9_]*` for all variable expansions (`$NAME`, `${NAME}`) and environment built-ins (`export`, `unset`).
+Encapsulate the alias table within `src/alias.c` using a singly-linked list with strict deep-copy memory ownership.
 
 ### Rationale
-- **Predictable Lexing**: Delineates variable names from trailing punctuation and word characters (e.g., `$VAR/path`, `$USER_123`).
-- **Defensive Environment Mutation**: Prevents malformed variable names (e.g., `1BAD=val`, `BAD-NAME=val`) from corrupting the C runtime environment table via `setenv()`.
+- **Encapsulation**: The internal node structure (`Alias`) is hidden from other subsystems.
+- **Memory Safety**: Updating or removing an alias frees the previous strings immediately. `destroy_alias_table()` frees all nodes at shutdown, guaranteeing 0 Valgrind leaks.
+- **Deterministic Listing**: `print_aliases()` sorts alias pointers with `qsort` to provide reproducible output.
 
 ---
 
-## 4. Built-in Execution in Pipeline Subshells
+## 3. Alias Expansion Ordering & Cycle Protection
+
+### Context
+Aliases can be self-referencing (e.g. `alias ls="ls --color"`) or mutually recursive (e.g. `alias a="b"`, `alias b="a"`).
 
 ### Decision
-Allow built-in commands (`export`, `unset`, `env`, `cd`, `jobs`, `fg`, `bg`) to execute directly in child subshells when they appear as pipeline stages (`spawn_child` -> `execute_builtin`), while executing directly in the parent process for standalone commands.
-
-### Rationale
-- **Pipeline Composability**: Enables commands like `env | grep PATH` or `export | sort` to function naturally as pipeline sources.
-- **Process Isolation**: In accordance with POSIX standards, built-in commands inside a pipeline execute in isolated child subshells; environment mutations (like `export FOO=bar | cat`) or directory changes (`cd /tmp | ls`) do not contaminate the parent shell process.
+1. **Expansion Ordering**: Alias expansion occurs **first**, directly on the raw command line at command boundaries, before tokenization, parameter expansion, and parsing.
+2. **Cycle Safety**: Expansion tracks visited alias identifiers within the current expansion chain and enforces a maximum depth limit of 16 (`SHELLX_MAX_ALIAS_DEPTH = 16`).
+3. **Quoting Invariant**: Quoted or backslash-escaped command words (e.g. `\ll`, `'ll'`, `"ll"`) are strictly shielded from alias expansion.
 
 ---
 
-## 5. Linked Command AST Representation
+## 4. Runtime Prompt Evaluation (`get_prompt()`)
+
+### Context
+Users require customizable interactive prompts via `$PS1`.
 
 ### Decision
-Represent pipelines as a singly linked list of `Command` structures, where each node points to the next pipeline stage (`Command *next`).
-
-```c
-struct Command {
-    char *args[SHELLX_MAX_ARGS];
-    size_t arg_count;
-    char *input_path;
-    char *output_path;
-    int append_output;
-    int run_in_background;
-    struct Command *next;
-};
-```
+Dynamically evaluate `$PS1` from the process environment on each REPL loop iteration, falling back to `SHELLX_DEFAULT_PROMPT` (`ShellX$ `).
 
 ### Rationale
-- **Dynamic Pipeline Sizing**: Linked nodes allow pipelines to scale to arbitrary lengths without requiring dynamic array reallocations during token parsing.
-- **Natural Ownership Flow**: Memory allocation and deallocation mirror singly linked list traversals (`free_command_list`), making memory leaks easily preventable and verifiable via Valgrind.
-- **Minimal Complexity**: For a POSIX pipeline shell, a linear linked list maps 1:1 to the execution flow of pipeline stages.
+- Unifies configuration from `.shellxrc` (`PS1="Custom$ "`), interactive export (`export PS1="New$ "`), and default settings into a single code path.
 
 ---
 
-## 6. Decoupling Parsing from Execution
+## 5. Subshell Built-in Execution in Pipelines
+
+### Context
+In multi-stage pipelines (`cmd1 | cmd2`), commands execute concurrently in child processes. When a built-in is placed in a pipeline (e.g. `env | grep PATH`), standard shell semantics dictate that its execution must not mutate the parent shell environment.
 
 ### Decision
-Strictly separate string tokenization and AST parsing (`parse_command_line`) from process spawning and pipeline execution (`execute_pipeline`, `execute_command`).
-
-### Rationale
-- **Side-Effect Prevention**: Parsing validation checks for syntax errors (e.g., trailing pipe `ls |`, missing redirection targets `cat <`) before any process is forked or file opened.
-- **Deterministic Unit Testing**: Parser functions take raw strings and return inspectable `Command` structures, allowing comprehensive unit testing without executing real binary commands or modifying system state.
-
----
-
-## 7. Iterative Rolling Pipeline Execution
-
-### Decision
-Execute multi-stage pipelines using an **iterative loop** with a single rolling file descriptor (`previous_read_fd`) rather than a recursive execution model or pre-allocating all pipes.
-
-### Rationale
-- **Bounded Resource Consumption**: Pre-allocating all pipe descriptors upfront consumes $2(N-1)$ file descriptors concurrently. The rolling pattern ensures at most **2 pipe descriptors** are open simultaneously in the parent shell process.
-- **Stack Safety**: Iterative loops guarantee $O(1)$ stack frame overhead regardless of pipeline depth.
-- **Clean Descriptor Inheritance**: Passing `close_fd` to `spawn_child` guarantees child processes close adjacent pipe ends, preventing deadlocks.
-
----
-
-## 8. Encapsulated Job Table Architecture
-
-### Decision
-Maintain an encapsulated internal Job Table (`include/jobs.h`, `src/jobs.c`) that tracks background processes and pipelines in a private linked list rather than exposing raw global mutable state.
-
-### Rationale
-- **Encapsulation**: Hides internal list structure behind clean accessor APIs (`add_job`, `find_job_by_id`, `find_job_by_pid`, `remove_job_by_id`, `destroy_job_table`).
-- **Memory Safety Guarantee**: `destroy_job_table()` cleans up all allocated `Job` structures and command strings upon shell exit, ensuring zero Valgrind memory leaks.
+Execute built-ins in child subshells when spawned as pipeline stages (`spawn_child`), while executing them in the parent process during standalone command execution.

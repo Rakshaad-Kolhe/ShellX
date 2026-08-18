@@ -1,6 +1,8 @@
 #define _POSIX_C_SOURCE 200809L
 
+#include "alias.h"
 #include "builtins.h"
+#include "config.h"
 #include "executor.h"
 #include "expansion.h"
 #include "jobs.h"
@@ -88,19 +90,23 @@ int main(void)
 
     init_signals();
     init_job_table();
+    initialize_shell_config();
 
     history_path = get_history_file_path();
     if (history_path != NULL) {
         read_history(history_path);
     }
 
+    load_shell_rc();
+
     while (!should_exit) {
         char *line;
+        char *expanded_line;
         Command *commands;
 
         update_job_status();
 
-        line = readline(SHELLX_PROMPT);
+        line = readline(get_prompt());
         if (line == NULL) {
             printf("\n");
             break;
@@ -111,8 +117,11 @@ int main(void)
                 add_history(line);
             }
 
+            expanded_line = expand_aliases(line);
+            const char *exec_input = (expanded_line != NULL) ? expanded_line : line;
+
             context.last_exit_status = last_exit_status;
-            commands = parse_command_line_with_context(line, &context);
+            commands = parse_command_line_with_context(exec_input, &context);
             if (commands != NULL) {
                 if (commands->next != NULL) {
                     int status = execute_pipeline(commands);
@@ -129,8 +138,10 @@ int main(void)
                     }
                 }
 
-            free_command_list(commands);
-        }
+                free_command_list(commands);
+            }
+
+            free(expanded_line);
         }
 
         free(line);
@@ -143,6 +154,7 @@ int main(void)
 
     clear_history();
     destroy_job_table();
+    destroy_shell_config();
 
     return 0;
 }
