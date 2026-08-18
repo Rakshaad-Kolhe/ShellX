@@ -15,6 +15,63 @@
 
 extern char **environ;
 
+static int is_assignment_command(const Command *command)
+{
+    if (command == NULL || command->arg_count == 0) {
+        return 0;
+    }
+
+    for (size_t i = 0; i < command->arg_count; i++) {
+        const char *arg = command->args[i];
+        if (arg == NULL) {
+            return 0;
+        }
+
+        const char *equals = strchr(arg, '=');
+        if (equals == NULL) {
+            return 0;
+        }
+
+        size_t name_len = (size_t)(equals - arg);
+        if (name_len == 0 || name_len >= 256) {
+            return 0;
+        }
+
+        char name[256];
+        memcpy(name, arg, name_len);
+        name[name_len] = '\0';
+
+        if (!is_valid_identifier(name)) {
+            return 0;
+        }
+    }
+
+    return 1;
+}
+
+static int execute_assignment(const Command *command)
+{
+    int status = 0;
+
+    for (size_t i = 0; i < command->arg_count; i++) {
+        const char *arg = command->args[i];
+        const char *equals = strchr(arg, '=');
+        size_t name_len = (size_t)(equals - arg);
+
+        char name[256];
+        memcpy(name, arg, name_len);
+        name[name_len] = '\0';
+
+        const char *value = equals + 1;
+        if (setenv(name, value, 1) != 0) {
+            perror("shellx: assignment");
+            status = 1;
+        }
+    }
+
+    return status;
+}
+
 static int execute_cd(const Command *command)
 {
     const char *directory;
@@ -323,6 +380,10 @@ int is_builtin(const Command *command)
         return 0;
     }
 
+    if (is_assignment_command(command)) {
+        return 1;
+    }
+
     return strcmp(command->args[0], "cd") == 0 ||
            strcmp(command->args[0], "exit") == 0 ||
            strcmp(command->args[0], "jobs") == 0 ||
@@ -343,6 +404,10 @@ int execute_builtin(const Command *command, int *should_exit)
     }
 
     *should_exit = 0;
+
+    if (is_assignment_command(command)) {
+        return execute_assignment(command);
+    }
 
     if (strcmp(command->args[0], "cd") == 0) {
         return execute_cd(command);
