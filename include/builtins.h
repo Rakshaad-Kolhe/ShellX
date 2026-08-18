@@ -4,7 +4,8 @@
 #include "pipeline.h"
 
 /*
- * Return nonzero when the borrowed command names a supported built-in.
+ * Return nonzero when the borrowed command names a supported built-in:
+ * cd, exit, jobs, fg, bg, export, unset, env, alias, unalias.
  * The command is not modified or freed.
  */
 int is_builtin(const Command *command);

@@ -1,50 +1,91 @@
 # Changelog
 
-All notable changes to this project will be documented in this file.
+All notable changes to **ShellX** are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
-## [Unreleased]
+## [0.5.0] - 2026-08-18
 
-### Planned
-- Script file execution mode and environment variable expansion (`v0.4.0`).
-- GitHub Actions CI matrix builds and Valgrind memory leak verification (`v1.0.0`).
+### Added
+- **Shell Startup Configuration (`~/.shellxrc`)**:
+  - Implemented configuration loader (`src/config.c`, `include/config.h`) reading `$HOME/.shellxrc` once at startup.
+  - Missing `.shellxrc` is handled silently and gracefully without error.
+  - Supports environment assignments (`NAME=VALUE`, `NAME="VALUE"`), prompt customization (`PS1="Prompt$ "`), and alias definitions (`alias name="value"`).
+  - Robust comment handling (`#`) with literal `#` character preservation inside quoted values.
+  - Line-numbered diagnostic reporting (`shellx: ~/.shellxrc:<line>: <error>`) for syntax errors without crashing or corrupting shell state.
+- **Internal Alias Subsystem (`src/alias.c`, `include/alias.h`)**:
+  - Encapsulated in-memory alias table managing deep-copied string mappings.
+  - `alias` built-in command: lists all aliases, prints specific alias definitions, and defines new/updated aliases.
+  - `unalias` built-in command: removes specified aliases with usage validation.
+  - Bounded alias expansion supporting pipeline segments and argument continuation with cycle detection and maximum recursion depth (`SHELLX_MAX_ALIAS_DEPTH = 16`).
+- **Dynamic Prompt Customization (`get_prompt()`)**:
+  - Runtime prompt evaluation checks `PS1` environment variable, falling back to `SHELLX_DEFAULT_PROMPT` (`ShellX$ `).
+- **Automated Test Suite (`tests/test_config.c`)**:
+  - Added 12 comprehensive unit tests for configuration loading, prompt overrides, alias CRUD operations, recursion protection, and quoted comments.
+
+---
+
+## [0.4.0] - 2026-08-18
+
+### Added
+- **Lexical Analyzer & Quote-Aware Tokenizer (`src/lexer.c`, `include/lexer.h`)**:
+  - Dynamic `TokenList` and `StringBuilder` token scanner.
+  - Single quoting (`'...'`) with literal text preservation.
+  - Double quoting (`"..."`) with variable/escape expansion and operator shielding.
+  - Backslash escaping (`\`) outside and inside double quotes.
+  - Operator shielding: `|`, `<`, `>`, `>>`, and `&` emit literal `TOKEN_WORD` when quoted or escaped.
+- **Parameter & Variable Expansion Engine (`src/expansion.c`, `include/expansion.h`)**:
+  - Environment variable expansion (`$VAR`, `${VAR}`).
+  - Special parameters: `$?` (exit code of last foreground command/pipeline) and `$$` (shell PID).
+  - Tilde expansion (`~`, `~/...`) resolving leading `~` to `$HOME`.
+  - POSIX identifier validation (`is_valid_identifier`).
+- **Environment Management Built-in Commands (`src/builtins.c`, `include/builtins.h`)**:
+  - `export [NAME[=VALUE] ...]`: Sets or lists exported variables with syntax validation.
+  - `unset [NAME ...]`: Unsets specified environment variables.
+  - `env`: Prints active environment variables.
+  - `cd`: Updates `PWD` in the environment on directory change.
+- **Pipeline Subshell Execution (`src/executor.c`)**:
+  - `spawn_child` executes built-in commands inside child subshells when chained in pipelines.
+- **Automated Test Suite (`tests/test_expansion.c`)**:
+  - Added 11 comprehensive unit tests for quoting, escaping, variable expansion, and error cases.
 
 ---
 
 ## [0.3.0] - 2026-07-23
 
 ### Added
-- **POSIX Job Control Subsystem (`jobs`, `fg`, `bg`)**: Implemented built-in commands `jobs` (lists active/stopped jobs), `fg` (brings background/stopped job to foreground), and `bg` (resumes stopped job in background).
-- **Process Group Isolation (`setpgid`)**: Isolated single commands and multi-stage pipeline stages into unique process groups (`setpgid`), ensuring Ctrl+C (`SIGINT`) and Ctrl+Z (`SIGTSTP`) signals target process groups rather than ShellX.
-- **Terminal Control (`tcsetpgrp`)**: Implemented dynamic terminal ownership transfer (`give_terminal_to`) between ShellX and active foreground process groups.
-- **Signal Handling & Async Reaping (`signals.c`)**: Added `init_signals()`, `setup_child_signals()`, and `update_job_status()` with non-blocking `waitpid(-1, &status, WNOHANG | WUNTRACED | WCONTINUED)` for zero zombie accumulation.
-- **Unit & System Tests**: Created `tests/test_signals.c` and updated test suite for 100% pass rate and zero Valgrind leaks across all binaries.
+- **POSIX Job Control & Signal Handling (`src/jobs.c`, `src/signals.c`)**:
+  - Background process execution (`&`).
+  - Process group isolation via `setpgid()`.
+  - Terminal ownership control via `tcsetpgrp()`.
+  - Non-blocking asynchronous child reaping with `SIGCHLD` handler.
+  - Built-in commands: `jobs`, `fg`, `bg`.
+  - Signal handling for `SIGINT` (Ctrl+C) and `SIGTSTP` (Ctrl+Z).
+- **Automated Test Suites (`tests/test_jobs.c`, `tests/test_signals.c`)**:
+  - Unit tests for job table lifecycle, state transitions, and signal management.
 
 ---
 
-## [0.2.0] - 2026-07-23
+## [0.2.0] - 2026-07-15
 
 ### Added
-- **GNU Readline Integration**: Replaced `fgets()` input loop in `src/main.c` with GNU `readline()` for interactive line editing.
-- **Configurable Prompt**: Added `ShellX$ ` prompt macro (`SHELLX_PROMPT`) in `include/shell.h`.
-- **Persistent Command History**: Integrated `read_history()` and `write_history()` to persist history entries across sessions to `~/.shellx_history`.
-- **Duplicate & Blank Filtering**: Implemented consecutive duplicate filtering (`is_duplicate_history`) and blank input skipping to keep history clean.
-- **Clean EOF Handling**: Added graceful `Ctrl+D` (EOF) exit handling without memory leaks (`clear_history()`).
-- **Build System Update**: Updated `Makefile` to link `-lreadline` and documented `libreadline-dev` system dependency in `README.md`.
+- **GNU Readline Interactive REPL (`src/main.c`)**:
+  - Interactive line editing, history navigation (Up/Down), and prompt rendering.
+  - Persistent command history stored in `~/.shellx_history` with duplicate filtering.
+  - Clean EOF handling (`Ctrl+D`).
 
 ---
 
-## [0.1.0] - 2026-07-23
+## [0.1.0] - 2026-07-01
 
 ### Added
-- **Lexical Parser & AST Subsystem**: Implemented `parse_command_line` and `free_command_list` in [src/parser.c](file:///wsl.localhost/Ubuntu/home/rakshaad/projects/ShellX/src/parser.c) for tokenizing input strings into linked `Command` nodes.
-- **I/O Redirection**: Added support for input redirection (`<`), output truncation (`>`), and output appending (`>>`).
-- **Pipeline Engine**: Implemented `execute_pipeline` in [src/pipeline.c](file:///wsl.localhost/Ubuntu/home/rakshaad/projects/ShellX/src/pipeline.c) using POSIX `pipe()`, `dup2()`, and iterative rolling descriptor management.
-- **Process Execution Engine**: Implemented child process spawning and exit status collection in [src/executor.c](file:///wsl.localhost/Ubuntu/home/rakshaad/projects/ShellX/src/executor.c) via `fork`, `execvp`, and `waitpid`.
-- **Built-in Command Engine**: Implemented `cd` (with `$HOME` fallback and argument checks) and `exit` in [src/builtins.c](file:///wsl.localhost/Ubuntu/home/rakshaad/projects/ShellX/src/builtins.c).
-- **Unit Test Suite**: Developed modular unit test binaries (`test_parser`, `test_executor`, `test_builtins`, `test_pipeline`) integrated with `make test`.
-- **Repository Engineering & Documentation**: Created professional `README.md`, technical architecture specifications (`docs/architecture.md`), design decisions (`docs/design-decisions.md`), future roadmap (`docs/future-roadmap.md`), contribution guidelines (`CONTRIBUTING.md`), issue templates, PR template, security policy (`SECURITY.md`), and MIT license.
+- **Core Shell Engine & Execution Subsystem**:
+  - Command parser (`src/parser.c`) and AST structure.
+  - Single command executor (`src/executor.c`) with `fork`, `execvp`, `waitpid`.
+  - File redirection (`<`, `>`, `>>`).
+  - Arbitrary-length multi-stage process pipeline executor (`src/pipeline.c`).
+  - Essential built-ins: `cd`, `exit`.
+  - Unit test suite (`test_parser`, `test_executor`, `test_builtins`, `test_pipeline`).

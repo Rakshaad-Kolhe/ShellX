@@ -1,124 +1,68 @@
-# Systems Design Decisions & Rationale
+# ShellX Design Decisions & Trade-offs
 
-This document documents the key architectural choices, engineering trade-offs, and design rationales behind **ShellX**.
+This document outlines key architectural design decisions, rationale, trade-offs, and invariants enforced across **ShellX**.
 
 ---
 
-## 1. Linked Command AST Representation
+## 1. Startup Configuration vs General Scripting Engine
+
+### Context
+Shells require startup configuration (`~/.shellxrc`) to initialize environment variables, aliases, and prompts.
 
 ### Decision
-Represent pipelines as a single-linked list of `Command` structures, where each node points to the next pipeline stage (`Command *next`).
-
-```c
-struct Command {
-    char *args[SHELLX_MAX_ARGS];
-    size_t arg_count;
-    char *input_path;
-    char *output_path;
-    int append_output;
-    int run_in_background;
-    struct Command *next;
-};
-```
-
-### Alternatives Considered
-- **Flat Dynamic Array of Commands**: Storing commands in a dynamic array (`Command *cmd_array`, `size_t count`).
-- **Full Parse Tree / AST**: Building a tree supporting nested expressions, subshells `(...)`, and logical operators (`&&`, `||`).
+Implement a dedicated, configuration-specific line parser (`src/config.c`) rather than treating `.shellxrc` as a generic executable shell script.
 
 ### Rationale
-- **Dynamic Pipeline Sizing**: Linked nodes allow pipelines to scale to arbitrary lengths without requiring dynamic array reallocations during token parsing.
-- **Natural Ownership Flow**: Memory allocation and deallocation mirror singly linked list traversals (`free_command_list`), making memory leaks easily preventable and verifiable via Valgrind.
-- **Minimal Complexity**: For a POSIX pipeline shell, a linear linked list maps 1:1 to the execution flow of pipeline stages.
+- **Security & Predictability**: Prevents executing arbitrary commands (`system()`, `popen()`, `/bin/sh -c`) during startup.
+- **Maintainability**: Avoids entangling startup initialization with incomplete scripting control flow grammar (`if`, `while`, `for`).
+- **Resilience**: Malformed lines report file and line numbers without aborting initialization or corrupting state.
 
 ---
 
-## 2. Decoupling Parsing from Execution
+## 2. Alias Table Architecture & Memory Ownership
+
+### Context
+Aliases map custom shorthand names to replacement strings and must persist across interactive commands.
 
 ### Decision
-Strictly separate string tokenization and AST parsing (`parse_command_line`) from process spawning and pipeline execution (`execute_pipeline`, `execute_command`).
-
-```
-[Raw String Input] ---> parse_command_line() ---> [Command AST] ---> execute_pipeline()
-```
+Encapsulate the alias table within `src/alias.c` using a singly-linked list with strict deep-copy memory ownership.
 
 ### Rationale
-- **Side-Effect Prevention**: Parsing validation checks for syntax errors (e.g., trailing pipe `ls |`, missing redirection targets `cat <`) before any process is forked or file opened. This prevents invalid syntax from producing partial side-effects like truncating existing files.
-- **Deterministic Unit Testing**: Parser functions take raw strings and return inspectable `Command` structures, allowing comprehensive unit testing without executing real binary commands or modifying system state.
-- **Clean Memory Management**: If syntax validation fails midway through parsing, the parser simply calls `free_command_list` on the partially constructed AST and returns `NULL`.
+- **Encapsulation**: The internal node structure (`Alias`) is hidden from other subsystems.
+- **Memory Safety**: Updating or removing an alias frees the previous strings immediately. `destroy_alias_table()` frees all nodes at shutdown, guaranteeing 0 Valgrind leaks.
+- **Deterministic Listing**: `print_aliases()` sorts alias pointers with `qsort` to provide reproducible output.
 
 ---
 
-## 3. Iterative Rolling Pipeline Execution
+## 3. Alias Expansion Ordering & Cycle Protection
+
+### Context
+Aliases can be self-referencing (e.g. `alias ls="ls --color"`) or mutually recursive (e.g. `alias a="b"`, `alias b="a"`).
 
 ### Decision
-Execute multi-stage pipelines using an **iterative loop** with a single rolling file descriptor (`previous_read_fd`) rather than a recursive execution model or pre-allocating all pipes.
+1. **Expansion Ordering**: Alias expansion occurs **first**, directly on the raw command line at command boundaries, before tokenization, parameter expansion, and parsing.
+2. **Cycle Safety**: Expansion tracks visited alias identifiers within the current expansion chain and enforces a maximum depth limit of 16 (`SHELLX_MAX_ALIAS_DEPTH = 16`).
+3. **Quoting Invariant**: Quoted or backslash-escaped command words (e.g. `\ll`, `'ll'`, `"ll"`) are strictly shielded from alias expansion.
 
-### Alternatives Considered
-- **Recursive Execution**: Spawning pipeline stages via recursive function calls.
-- **Pre-allocated Pipe Array**: Creating $N-1$ pipe descriptor pairs upfront in an array `int fds[N-1][2]`.
+---
+
+## 4. Runtime Prompt Evaluation (`get_prompt()`)
+
+### Context
+Users require customizable interactive prompts via `$PS1`.
+
+### Decision
+Dynamically evaluate `$PS1` from the process environment on each REPL loop iteration, falling back to `SHELLX_DEFAULT_PROMPT` (`ShellX$ `).
 
 ### Rationale
-- **Bounded Resource Consumption**: Pre-allocating all pipe descriptors upfront consumes $2(N-1)$ file descriptors concurrently. If $N$ is large, the process risks hitting the system file descriptor limit (`RLIMIT_NOFILE`). The rolling pattern ensures at most **2 pipe descriptors** are open simultaneously in the parent shell process.
-- **Stack Safety**: Iterative loops guarantee $O(1)$ stack frame overhead regardless of pipeline depth.
-- **Clean Descriptor Inheritance**: Passing `close_fd` to `spawn_child` guarantees that child processes close the write/read ends of adjacent pipes, preventing deadlocks caused by unclosed write descriptors keeping readers waiting indefinitely.
+- Unifies configuration from `.shellxrc` (`PS1="Custom$ "`), interactive export (`export PS1="New$ "`), and default settings into a single code path.
 
 ---
 
-## 4. Borrowed Pointer Memory Ownership Contract
+## 5. Subshell Built-in Execution in Pipelines
+
+### Context
+In multi-stage pipelines (`cmd1 | cmd2`), commands execute concurrently in child processes. When a built-in is placed in a pipeline (e.g. `env | grep PATH`), standard shell semantics dictate that its execution must not mutate the parent shell environment.
 
 ### Decision
-Functions in the execution engine (`execute_command`, `spawn_child`, `execute_pipeline`, `is_builtin`, `execute_builtin`) take **read-only borrowed pointers** (`const Command *`).
-
-```c
-int execute_command(const Command *command);
-int execute_pipeline(const Command *commands);
-int is_builtin(const Command *command);
-```
-
-### Rationale
-- **Explicit Lifetime Separation**: The execution engine does not alter, reallocate, or free the AST passed to it.
-- **Single Responsibility Memory Lifecycle**: Memory allocation occurs exclusively inside `parse_command_line`, and memory freeing occurs exclusively inside `free_command_list` at the end of the REPL iteration loop in `main()`.
-
----
-
-## 5. Standard POSIX Exit Status Encoding
-
-### Decision
-Encode process exit statuses in exact compliance with POSIX standard shell conventions:
-
-```c
-if (WIFEXITED(status)) {
-    return WEXITSTATUS(status);
-}
-if (WIFSIGNALED(status)) {
-    return 128 + WTERMSIG(status);
-}
-```
-
-### Special Exit Codes
-- **`127`**: Returned when binary execution fails (`execvp` error, command not found).
-- **`126`**: Returned when child environment setup or redirection file opening fails prior to execution.
-
----
-
-## 6. Encapsulated Job Table Architecture
-
-### Decision
-Maintain an encapsulated internal Job Table (`include/jobs.h`, `src/jobs.c`) that tracks background processes and pipelines in a private linked list rather than exposing raw global mutable state.
-
-```c
-typedef struct Job {
-    int job_id;
-    pid_t pgid;
-    pid_t pid;
-    char *command;
-    JobState state;
-    int is_background;
-    struct Job *next;
-} Job;
-```
-
-### Rationale
-- **Encapsulation**: Hides internal list structure behind clean accessor APIs (`add_job`, `find_job_by_id`, `find_job_by_pid`, `remove_job_by_id`, `destroy_job_table`), preventing unauthorized mutations across execution modules.
-- **Logical Pipeline Unit**: Multi-stage pipelines register a single `Job` record storing the pipeline leader PID and full command string, providing the architectural foundation for upcoming POSIX job control commands (`jobs`, `fg`, `bg`).
-- **Memory Safety Guarantee**: `destroy_job_table()` cleans up all allocated `Job` structures and command strings upon shell exit, ensuring zero Valgrind memory leaks.
+Execute built-ins in child subshells when spawned as pipeline stages (`spawn_child`), while executing them in the parent process during standalone command execution.

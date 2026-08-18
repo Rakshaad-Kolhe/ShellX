@@ -1,16 +1,76 @@
 #define _POSIX_C_SOURCE 200809L
 
 #include "builtins.h"
-
-
+#include "alias.h"
+#include "expansion.h"
 #include "jobs.h"
 
+#include <ctype.h>
 #include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/types.h>
 #include <unistd.h>
+
+extern char **environ;
+
+static int is_assignment_command(const Command *command)
+{
+    if (command == NULL || command->arg_count == 0) {
+        return 0;
+    }
+
+    for (size_t i = 0; i < command->arg_count; i++) {
+        const char *arg = command->args[i];
+        if (arg == NULL) {
+            return 0;
+        }
+
+        const char *equals = strchr(arg, '=');
+        if (equals == NULL) {
+            return 0;
+        }
+
+        size_t name_len = (size_t)(equals - arg);
+        if (name_len == 0 || name_len >= 256) {
+            return 0;
+        }
+
+        char name[256];
+        memcpy(name, arg, name_len);
+        name[name_len] = '\0';
+
+        if (!is_valid_identifier(name)) {
+            return 0;
+        }
+    }
+
+    return 1;
+}
+
+static int execute_assignment(const Command *command)
+{
+    int status = 0;
+
+    for (size_t i = 0; i < command->arg_count; i++) {
+        const char *arg = command->args[i];
+        const char *equals = strchr(arg, '=');
+        size_t name_len = (size_t)(equals - arg);
+
+        char name[256];
+        memcpy(name, arg, name_len);
+        name[name_len] = '\0';
+
+        const char *value = equals + 1;
+        if (setenv(name, value, 1) != 0) {
+            perror("shellx: assignment");
+            status = 1;
+        }
+    }
+
+    return status;
+}
 
 static int execute_cd(const Command *command)
 {
@@ -34,6 +94,11 @@ static int execute_cd(const Command *command)
     if (chdir(directory) != 0) {
         perror("shellx: cd");
         return 1;
+    }
+
+    char cwd[4096];
+    if (getcwd(cwd, sizeof(cwd)) != NULL) {
+        setenv("PWD", cwd, 1);
     }
 
     return 0;
@@ -135,17 +200,200 @@ static int execute_bg(const Command *command)
     return 0;
 }
 
+static int execute_export(const Command *command)
+{
+    if (command->arg_count == 1) {
+        if (environ != NULL) {
+            for (char **env = environ; *env != NULL; env++) {
+                printf("export %s\n", *env);
+            }
+        }
+        fflush(stdout);
+        return 0;
+    }
+
+    int status = 0;
+    for (size_t i = 1; i < command->arg_count; i++) {
+        const char *arg = command->args[i];
+        const char *equals = strchr(arg, '=');
+
+        if (equals != NULL) {
+            size_t name_len = (size_t)(equals - arg);
+            if (name_len == 0) {
+                fprintf(stderr, "shellx: export: `%s': not a valid identifier\n", arg);
+                status = 1;
+                continue;
+            }
+
+            char name[256];
+            if (name_len >= sizeof(name)) {
+                fprintf(stderr, "shellx: export: `%s': identifier too long\n", arg);
+                status = 1;
+                continue;
+            }
+
+            memcpy(name, arg, name_len);
+            name[name_len] = '\0';
+
+            if (!is_valid_identifier(name)) {
+                fprintf(stderr, "shellx: export: `%s': not a valid identifier\n", arg);
+                status = 1;
+                continue;
+            }
+
+            const char *value = equals + 1;
+            if (setenv(name, value, 1) != 0) {
+                perror("shellx: export");
+                status = 1;
+            }
+        } else {
+            if (!is_valid_identifier(arg)) {
+                fprintf(stderr, "shellx: export: `%s': not a valid identifier\n", arg);
+                status = 1;
+                continue;
+            }
+
+            if (getenv(arg) == NULL) {
+                if (setenv(arg, "", 1) != 0) {
+                    perror("shellx: export");
+                    status = 1;
+                }
+            }
+        }
+    }
+
+    return status;
+}
+
+static int execute_unset(const Command *command)
+{
+    int status = 0;
+
+    for (size_t i = 1; i < command->arg_count; i++) {
+        const char *name = command->args[i];
+
+        if (!is_valid_identifier(name)) {
+            fprintf(stderr, "shellx: unset: `%s': not a valid identifier\n", name);
+            status = 1;
+            continue;
+        }
+
+        if (unsetenv(name) != 0) {
+            perror("shellx: unset");
+            status = 1;
+        }
+    }
+
+    return status;
+}
+
+static int execute_env(const Command *command)
+{
+    if (command->arg_count > 1) {
+        fprintf(stderr, "shellx: env: arguments are not supported\n");
+        return 1;
+    }
+
+    if (environ != NULL) {
+        for (char **env = environ; *env != NULL; env++) {
+            printf("%s\n", *env);
+        }
+    }
+    fflush(stdout);
+    return 0;
+}
+
+static int execute_alias(const Command *command)
+{
+    if (command->arg_count == 1) {
+        print_aliases();
+        return 0;
+    }
+
+    int status = 0;
+    for (size_t i = 1; i < command->arg_count; i++) {
+        const char *arg = command->args[i];
+        const char *equals = strchr(arg, '=');
+
+        if (equals != NULL) {
+            size_t name_len = (size_t)(equals - arg);
+            if (name_len == 0) {
+                fprintf(stderr, "shellx: alias: `%s': not a valid identifier\n", arg);
+                status = 1;
+                continue;
+            }
+
+            char name[256];
+            if (name_len >= sizeof(name)) {
+                fprintf(stderr, "shellx: alias: `%s': identifier too long\n", arg);
+                status = 1;
+                continue;
+            }
+
+            memcpy(name, arg, name_len);
+            name[name_len] = '\0';
+
+            if (!is_valid_identifier(name)) {
+                fprintf(stderr, "shellx: alias: `%s': not a valid identifier\n", arg);
+                status = 1;
+                continue;
+            }
+
+            const char *value = equals + 1;
+            if (!set_alias(name, value)) {
+                fprintf(stderr, "shellx: alias: failed to set `%s'\n", name);
+                status = 1;
+            }
+        } else {
+            if (!print_alias(arg)) {
+                fprintf(stderr, "shellx: alias: %s: not found\n", arg);
+                status = 1;
+            }
+        }
+    }
+
+    return status;
+}
+
+static int execute_unalias(const Command *command)
+{
+    if (command->arg_count == 1) {
+        fprintf(stderr, "shellx: unalias: usage: unalias name ...\n");
+        return 1;
+    }
+
+    int status = 0;
+    for (size_t i = 1; i < command->arg_count; i++) {
+        const char *name = command->args[i];
+        if (!remove_alias(name)) {
+            fprintf(stderr, "shellx: unalias: %s: not found\n", name);
+            status = 1;
+        }
+    }
+
+    return status;
+}
+
 int is_builtin(const Command *command)
 {
     if (command == NULL || command->arg_count == 0 || command->args[0] == NULL) {
         return 0;
     }
 
+    if (is_assignment_command(command)) {
+        return 1;
+    }
+
     return strcmp(command->args[0], "cd") == 0 ||
            strcmp(command->args[0], "exit") == 0 ||
            strcmp(command->args[0], "jobs") == 0 ||
            strcmp(command->args[0], "fg") == 0 ||
-           strcmp(command->args[0], "bg") == 0;
+           strcmp(command->args[0], "bg") == 0 ||
+           strcmp(command->args[0], "export") == 0 ||
+           strcmp(command->args[0], "unset") == 0 ||
+           strcmp(command->args[0], "env") == 0 ||
+           strcmp(command->args[0], "alias") == 0 ||
+           strcmp(command->args[0], "unalias") == 0;
 }
 
 int execute_builtin(const Command *command, int *should_exit)
@@ -156,6 +404,10 @@ int execute_builtin(const Command *command, int *should_exit)
     }
 
     *should_exit = 0;
+
+    if (is_assignment_command(command)) {
+        return execute_assignment(command);
+    }
 
     if (strcmp(command->args[0], "cd") == 0) {
         return execute_cd(command);
@@ -175,6 +427,26 @@ int execute_builtin(const Command *command, int *should_exit)
 
     if (strcmp(command->args[0], "bg") == 0) {
         return execute_bg(command);
+    }
+
+    if (strcmp(command->args[0], "export") == 0) {
+        return execute_export(command);
+    }
+
+    if (strcmp(command->args[0], "unset") == 0) {
+        return execute_unset(command);
+    }
+
+    if (strcmp(command->args[0], "env") == 0) {
+        return execute_env(command);
+    }
+
+    if (strcmp(command->args[0], "alias") == 0) {
+        return execute_alias(command);
+    }
+
+    if (strcmp(command->args[0], "unalias") == 0) {
+        return execute_unalias(command);
     }
 
     return 1;

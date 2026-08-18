@@ -1,8 +1,9 @@
 #include "parser.h"
+#include "lexer.h"
 
-#include <ctype.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
 
 static void initialize_command(Command *command)
 {
@@ -32,203 +33,6 @@ static Command *allocate_command(void)
     return command;
 }
 
-static char *copy_token(const char *start, size_t length)
-{
-    char *copy = malloc(length + 1);
-
-    if (copy == NULL) {
-        return NULL;
-    }
-
-    memcpy(copy, start, length);
-    copy[length] = '\0';
-
-    return copy;
-}
-
-static void skip_whitespace(const char **cursor)
-{
-    while (**cursor != '\0' && isspace((unsigned char)**cursor)) {
-        (*cursor)++;
-    }
-}
-
-static int is_operator(char character)
-{
-    return character == '|' || character == '<' ||
-           character == '>' || character == '&';
-}
-
-static char *parse_word(const char **cursor)
-{
-    const char *start = *cursor;
-
-    while (**cursor != '\0' &&
-           !isspace((unsigned char)**cursor) &&
-           !is_operator(**cursor)) {
-        (*cursor)++;
-    }
-
-    if (*cursor == start) {
-        return NULL;
-    }
-
-    return copy_token(start, (size_t)(*cursor - start));
-}
-
-static int append_argument(Command *command, char *argument)
-{
-    if (command->arg_count >= SHELLX_MAX_ARGS - 1) {
-        free(argument);
-        return 0;
-    }
-
-    command->args[command->arg_count] = argument;
-    command->arg_count++;
-    command->args[command->arg_count] = NULL;
-
-    return 1;
-}
-
-static int parse_redirection(Command *command, const char **cursor)
-{
-    char operator = **cursor;
-    int append_output = 0;
-    char *path;
-
-    (*cursor)++;
-    if (operator == '>' && **cursor == '>') {
-        append_output = 1;
-        (*cursor)++;
-    }
-
-    skip_whitespace(cursor);
-    if (**cursor == '\0' || is_operator(**cursor)) {
-        return 0;
-    }
-
-    path = parse_word(cursor);
-    if (path == NULL) {
-        return 0;
-    }
-
-    if (operator == '<') {
-        if (command->input_path != NULL) {
-            free(path);
-            return 0;
-        }
-        command->input_path = path;
-        return 1;
-    }
-
-    if (command->output_path != NULL) {
-        free(path);
-        return 0;
-    }
-
-    command->output_path = path;
-    command->append_output = append_output;
-    return 1;
-}
-
-static int remaining_input_is_whitespace(const char *cursor)
-{
-    skip_whitespace(&cursor);
-    return *cursor == '\0';
-}
-
-Command *parse_command_line(const char *input)
-{
-    Command *head;
-    Command *command;
-    const char *cursor;
-
-    if (input == NULL) {
-        return NULL;
-    }
-
-    cursor = input;
-    skip_whitespace(&cursor);
-
-    if (*cursor == '\0') {
-        return NULL;
-    }
-
-    head = allocate_command();
-    if (head == NULL) {
-        return NULL;
-    }
-
-    command = head;
-
-    while (*cursor != '\0') {
-        char *argument;
-
-        skip_whitespace(&cursor);
-        if (*cursor == '\0') {
-            break;
-        }
-
-        if (*cursor == '|') {
-            Command *next_command;
-
-            if (command->arg_count == 0) {
-                free_command_list(head);
-                return NULL;
-            }
-
-            cursor++;
-            skip_whitespace(&cursor);
-            if (*cursor == '\0' || *cursor == '|') {
-                free_command_list(head);
-                return NULL;
-            }
-
-            next_command = allocate_command();
-            if (next_command == NULL) {
-                free_command_list(head);
-                return NULL;
-            }
-
-            command->next = next_command;
-            command = next_command;
-            continue;
-        }
-
-        if (*cursor == '<' || *cursor == '>') {
-            if (!parse_redirection(command, &cursor)) {
-                free_command_list(head);
-                return NULL;
-            }
-            continue;
-        }
-
-        if (*cursor == '&') {
-            cursor++;
-            if (command->arg_count == 0 || !remaining_input_is_whitespace(cursor)) {
-                free_command_list(head);
-                return NULL;
-            }
-
-            head->run_in_background = 1;
-            break;
-        }
-
-        argument = parse_word(&cursor);
-        if (argument == NULL || !append_argument(command, argument)) {
-            free_command_list(head);
-            return NULL;
-        }
-    }
-
-    if (command->arg_count == 0) {
-        free_command_list(head);
-        return NULL;
-    }
-
-    return head;
-}
-
 void free_command_list(Command *commands)
 {
     while (commands != NULL) {
@@ -237,12 +41,163 @@ void free_command_list(Command *commands)
 
         for (index = 0; index < commands->arg_count; index++) {
             free(commands->args[index]);
+            commands->args[index] = NULL;
         }
 
         free(commands->input_path);
+        commands->input_path = NULL;
         free(commands->output_path);
+        commands->output_path = NULL;
         free(commands);
 
         commands = next;
     }
+}
+
+Command *parse_command_line_with_context(const char *input,
+                                   const ShellContext *context)
+{
+    TokenList tokens;
+    Command *head = NULL;
+    Command *command = NULL;
+
+    if (input == NULL) {
+        return NULL;
+    }
+
+    if (!tokenize(input, context, &tokens)) {
+        return NULL;
+    }
+
+    if (tokens.count == 0) {
+        free_token_list(&tokens);
+        return NULL;
+    }
+
+    head = allocate_command();
+    if (head == NULL) {
+        free_token_list(&tokens);
+        return NULL;
+    }
+    command = head;
+
+    for (size_t i = 0; i < tokens.count; i++) {
+        Token *tok = &tokens.tokens[i];
+
+        if (tok->type == TOKEN_PIPE) {
+            Command *next_command;
+
+            if (command->arg_count == 0) {
+                free_command_list(head);
+                free_token_list(&tokens);
+                return NULL;
+            }
+
+            if (i + 1 >= tokens.count || tokens.tokens[i + 1].type == TOKEN_PIPE) {
+                free_command_list(head);
+                free_token_list(&tokens);
+                return NULL;
+            }
+
+            next_command = allocate_command();
+            if (next_command == NULL) {
+                free_command_list(head);
+                free_token_list(&tokens);
+                return NULL;
+            }
+
+            command->next = next_command;
+            command = next_command;
+            continue;
+        }
+
+        if (tok->type == TOKEN_REDIRECT_IN) {
+           if (i + 1 >= tokens.count || tokens.tokens[i + 1].type != TOKEN_WORD) {
+                free_command_list(head);
+                free_token_list(&tokens);
+                return NULL;
+            }
+
+            if (command->input_path != NULL) {
+                free_command_list(head);
+                free_token_list(&tokens);
+                return NULL;
+            }
+
+            i++;
+            command->input_path = tokens.tokens[i].value;
+            tokens.tokens[i].value = NULL;
+            continue;
+        }
+
+        if (tok->type == TOKEN_REDIRECT_OUT || tok->type == TOKEN_REDIRECT_APPEND) {
+            int append_output = (tok->type == TOKEN_REDIRECT_APPEND);
+
+            if (i + 1 >= tokens.count || tokens.tokens[i + 1].type != TOKEN_WORD) {
+                free_command_list(head);
+                free_token_list(&tokens);
+                return NULL;
+            }
+
+            if (command->output_path != NULL) {
+                free_command_list(head);
+                free_token_list(&tokens);
+                return NULL;
+            }
+
+            i++;
+            command->output_path = tokens.tokens[i].value;
+            tokens.tokens[i].value = NULL;
+            command->append_output = append_output;
+            continue;
+        }
+
+        if (tok->type == TOKEN_BACKGROUND) {
+            if (command->arg_count == 0 || i + 1 < tokens.count) {
+                free_command_list(head);
+                free_token_list(&tokens);
+                return NULL;
+            }
+
+            head->run_in_background = 1;
+            break;
+        }
+
+        if (tok->type == TOKEN_WORD) {
+            if (command->arg_count >= SHELLX_MAX_ARGS - 1) {
+                free_command_list(head);
+                free_token_list(&tokens);
+                return NULL;
+            }
+
+            command->args[command->arg_count] = tok->value;
+            tok->value = NULL;
+            command->arg_count++;
+            command->args[command->arg_count] = NULL;
+            continue;
+        }
+    }
+
+    Command *curr = head;
+    while (curr != NULL) {
+        if (curr->arg_count == 0) {
+            free_command_list(head);
+            free_token_list(&tokens);
+            return NULL;
+        }
+        curr = curr->next;
+    }
+
+    free_token_list(&tokens);
+    return head;
+}
+
+Command *parse_command_line(const char *input)
+{
+    ShellContext default_context = {
+        .last_exit_status = 0,
+        .shell_pid = getpid()
+    };
+
+    return parse_command_line_with_context(input, &default_context);
 }

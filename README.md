@@ -1,79 +1,67 @@
-# ShellX
+# ShellX — A POSIX-Oriented Unix Shell in C17
 
-A lightweight, POSIX-compliant UNIX shell written in modern C17, designed as an educational model for UNIX systems programming, process management, inter-process communication (IPC), and I/O redirection.
-
-[![C17](https://img.shields.io/badge/Language-C17-blue.svg)](https://en.cppreference.com/w/c/17)
-[![Linux](https://img.shields.io/badge/Platform-Linux%20%2F%20POSIX-f05133.svg)](https://www.kernel.org)
-[![POSIX](https://img.shields.io/badge/Standard-POSIX.1--2008-orange.svg)](https://pubs.opengroup.org/onlinepubs/9699919799/)
-[![Build: GNU Make](https://img.shields.io/badge/Build-GNU%20Make-brightgreen.svg)](Makefile)
+[![C17 Standard](https://img.shields.io/badge/C-17-blue.svg)](https://en.wikipedia.org/wiki/C17_(C_standard_revision))
+[![POSIX Process Model](https://img.shields.io/badge/POSIX-Process%20Model-green.svg)](https://pubs.opengroup.org/onlinepubs/9699919799/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
-[![Status: Development](https://img.shields.io/badge/Status-Development-lightgrey.svg)](#roadmap)
+[![Build Status](https://img.shields.io/badge/build-passing-brightgreen.svg)]()
+
+**ShellX** is a modular, POSIX-oriented Unix shell implemented from scratch in **C17** using standard POSIX process, terminal, signal, and environment APIs. Built with clean architectural decoupling, strict memory ownership guarantees, and zero memory leaks under Valgrind, ShellX serves as both a functional interactive command shell and a modern systems programming reference.
 
 ---
 
-## Overview
+## Key Features
 
-**ShellX** is a minimalist UNIX shell implementation focused on foundational systems programming concepts. It serves as an architectural blueprint for understanding process management, memory safety, lexical tokenization, file descriptor manipulation, and pipeline synchronization.
-
-### Why ShellX Exists
-Modern shells like `bash` and `zsh` consist of hundreds of thousands of lines of legacy code, making them difficult to study for core operating system mechanisms. **ShellX** strips away complex interactive features (e.g., alias expansion, parameter expansion) to highlight clean, unadorned UNIX kernel primitives (`fork`, `execvp`, `pipe`, `dup2`, `waitpid`).
-
-### Primary Objectives
-- **Systems Programming Rigor**: Showcase strict C17 standards compliance (`-std=c17 -Wall -Wextra -Wpedantic`), robust memory handling, and explicit error checking.
-- **IPC & Process Architecture**: Provide a clear implementation of arbitrary-length IPC pipelines using standard file descriptor chaining.
-- **Educational Clarity**: Maintain clean module separation between lexical parsing, pipeline AST abstraction, built-in command handling, and process execution.
+- **Shell Startup Configuration (`~/.shellxrc`)**:
+  - Automatically loads initialization settings from `$HOME/.shellxrc` before the interactive REPL starts.
+  - Missing `.shellxrc` is handled silently and gracefully without error.
+  - Supports environment assignments (`NAME=VALUE`, `NAME="VALUE"`), prompt customization (`PS1="Prompt$ "`), and alias definitions (`alias name="value"`).
+  - Comment support (`#`) with preservation of `#` inside quoted strings.
+  - Diagnostic reporting identifies file and line numbers for malformed lines without corrupting shell state or terminating the session.
+- **Internal Alias Subsystem**:
+  - In-memory alias table managing deep-copied alias definitions.
+  - `alias`: Lists all aliases in canonical `alias name='value'` format.
+  - `alias NAME`: Displays the specific alias definition.
+  - `alias NAME=VALUE` / `alias NAME="VALUE"`: Defines or updates aliases in the parent process.
+  - `unalias NAME ...`: Removes specified alias definitions.
+  - **Bounded Alias Expansion**: Replaces unquoted command words with their alias text, supporting pipelines and command chaining with visited-alias cycle detection and recursion depth limiting (`max_depth = 16`).
+- **Dynamic Prompt Customization**:
+  - Runtime prompt evaluation checks `$PS1` in the environment, falling back to `ShellX$ ` when unset.
+- **Lexical Tokenizer & Expansion Engine**:
+  - Full lexer with quote-aware scanner separating quotes, escapes, parameter expansions, and operator recognition.
+  - **Single Quoting (`'...'`)**: Treats all enclosed characters literally with zero variable interpolation or operator parsing.
+  - **Double Quoting (`"..."`)**: Preserves literal whitespace and operators while expanding variables (`$VAR`, `$?`, `$$`) and respecting escape sequences (`\$`, `\"`, `\\`).
+  - **Backslash Escaping (`\`)**: Outside quotes, quotes any single character. Inside double quotes, retains escape meaning exclusively for `$`, `"`, and `\\`; other escaped characters (e.g. `\n`, `\a`) are preserved literally.
+  - **Tilde Expansion (`~`, `~/...`)**: Resolves leading `~` to `$HOME`.
+  - **Special Parameters**: Supports `$?` (last foreground exit status) and `$$` (shell PID).
+- **Environment Management Built-ins**:
+  - `export [NAME[=VALUE] ...]`: Sets or lists exported environment variables with POSIX identifier validation (`[a-zA-Z_][a-zA-Z0-9_]*`).
+  - `unset [NAME ...]`: Unsets specified environment variables.
+  - `env`: Prints current environment variables.
+  - `cd`: Updates `PWD` in the environment on directory change.
+- **POSIX Job Control & Signal Management**:
+  - Full support for background jobs (`&`), job table tracking, and built-ins `jobs`, `fg`, and `bg`.
+  - Process group isolation via `setpgid()` and terminal ownership control via `tcsetpgrp()`.
+  - Non-blocking `SIGCHLD` asynchronous zombie process reaping.
+  - Proper signal masking and terminal handling for `SIGINT` (Ctrl+C) and `SIGTSTP` (Ctrl+Z).
+- **Multi-Stage Process Pipelines**: Arbitrary command piping (`cmd1 | cmd2 | cmd3 | ...`) using an iterative rolling file descriptor model that caps concurrent descriptor usage to $O(1)$.
+- **Standard File Redirections**: Input redirection (`<`), output truncation (`>`), and output appending (`>>`).
+- **Interactive REPL with Persistent History**: GNU Readline integration featuring configurable prompt, cursor navigation, history traversal (Up/Down), and persistent disk storage in `~/.shellx_history` with duplicate filtering.
+- **Strict Quality Standards**: Compiled with `-std=c17 -Wall -Wextra -Wpedantic` with zero warnings, zero undefined behavior, and 100% leak-free heap execution verified under Valgrind.
 
 ---
 
-## Features
+## Architectural Highlights
 
-The feature matrix below details the current implementation state of **ShellX**.
-
-| Feature | Status | Implementation Details |
-| :--- | :---: | :--- |
-| **Command Parsing** | ✔ Implemented | Custom whitespace tokenizer & AST builder separating syntax parsing from execution. |
-| **Built-in Commands** | ✔ Implemented | In-process execution for core built-ins (`cd` with `HOME` fallback, `exit`). |
-| **Arbitrary Pipelines** | ✔ Implemented | Multi-stage pipeline execution (`cmd1 \| cmd2 \| ... \| cmdN`) via `pipe()` and `dup2()`. |
-| **Input Redirection** | ✔ Implemented | File input redirection using `<` operator (`O_RDONLY`). |
-| **Output Redirection** | ✔ Implemented | File output truncation redirection using `>` operator (`O_WRONLY \| O_CREAT \| O_TRUNC`). |
-| **Append Redirection** | ✔ Implemented | File output append redirection using `>>` operator (`O_WRONLY \| O_CREAT \| O_APPEND`). |
-| **Automated Test Suite** | ✔ Implemented | Comprehensive unit test suite covering parser, executor, built-in, and pipeline modules. |
-| **GNU Readline / Line Editing** | ✔ Implemented | Interactive prompt (`ShellX$ `), arrow key line editing, and `Ctrl+D` EOF handling (`v0.2.0`). |
-| **Persistent History** | ✔ Implemented | History persistence across shell sessions stored in `~/.shellx_history` with duplicate filtering (`v0.2.0`). |
-| **Background Execution (`&`)** | ✔ Implemented | Asynchronous background execution (`cmd &`, `cmd1 \| cmd2 &`) displaying `[job_id] <pid>` (`v0.3.0`). |
-| **Job Table Infrastructure** | ✔ Implemented | Encapsulated in-memory Job Table tracking background processes and pipelines (`v0.3.0`). |
-| **POSIX Job Control (`fg`/`bg`/`jobs`)** | ✔ Implemented | Process group isolation (`setpgid`), terminal control (`tcsetpgrp`), signal handling (`SIGINT`/`SIGTSTP`/`SIGCHLD`), and `jobs`/`fg`/`bg` built-ins (`v0.3.0`). |
-
-> [!NOTE]
-> ShellX implements full POSIX job control. Background processes and multi-stage pipelines run in isolated process groups, support terminal ownership transfer (`tcsetpgrp`), and can be monitored or resumed using `jobs`, `fg %id`, and `bg %id`.
-
----
-
-## Architecture
-
-ShellX follows a modular compilation architecture where execution flow is divided into four main layers:
-
-```mermaid
-flowchart TD
-    User([User Interactive Input]) --> Readline[GNU Readline & History<br/>readline, add_history, read/write_history]
-    Readline --> Parser[Parser Module<br/>parse_command_line]
-    Parser --> AST[Command Linked List AST<br/>Command struct]
-    AST --> Router{Is Built-in or Pipeline?}
-    Router -->|Pipeline / Multi-stage| Pipeline[Pipeline Engine<br/>execute_pipeline]
-    Router -->|Built-in cd / exit| Builtin[Built-in Engine<br/>execute_builtin]
-    Router -->|Single Process| Executor[Execution Engine<br/>execute_command]
-    Pipeline --> Processes[Forked Child Processes<br/>pipe, dup2, execvp]
-    Executor --> Processes
-    Builtin --> ShellProcess[ShellX Process State]
-    Processes --> Wait[Process Synchronization<br/>waitpid status collection]
-```
-
-### Module Responsibilities
-- [include/shell.h](file:///wsl.localhost/Ubuntu/home/rakshaad/projects/ShellX/include/shell.h) & [src/main.c](file:///wsl.localhost/Ubuntu/home/rakshaad/projects/ShellX/src/main.c): Interactive REPL entry point managing GNU Readline input loop, prompt rendering (`ShellX$ `), persistent history loading/saving (`~/.shellx_history`), and `Ctrl+D` EOF handling.
-- [include/parser.h](file:///wsl.localhost/Ubuntu/home/rakshaad/projects/ShellX/include/parser.h) & [src/parser.c](file:///wsl.localhost/Ubuntu/home/rakshaad/projects/ShellX/src/parser.c): Tokenizes input line into null-terminated argument arrays and builds a linked list of `Command` structures.
-- [include/pipeline.h](file:///wsl.localhost/Ubuntu/home/rakshaad/projects/ShellX/include/pipeline.h) & [src/pipeline.c](file:///wsl.localhost/Ubuntu/home/rakshaad/projects/ShellX/src/pipeline.c): Manages iterative pipe descriptor creation, child process spawns, descriptor inheritance, and exit status collection.
-- [include/executor.h](file:///wsl.localhost/Ubuntu/home/rakshaad/projects/ShellX/include/executor.h) & [src/executor.c](file:///wsl.localhost/Ubuntu/home/rakshaad/projects/ShellX/src/executor.c): Spawns individual child processes, applies file redirections (`<`, `>`, `>>`), and executes binaries via `execvp`.
-- [include/builtins.h](file:///wsl.localhost/Ubuntu/home/rakshaad/projects/ShellX/include/builtins.h) & [src/builtins.c](file:///wsl.localhost/Ubuntu/home/rakshaad/projects/ShellX/src/builtins.c): Executes shell state modification commands directly within the main shell process.
+- [include/config.h](include/config.h) & [src/config.c](src/config.c): Configuration loader, `.shellxrc` line parser, and environment/prompt initialization.
+- [include/alias.h](include/alias.h) & [src/alias.c](src/alias.c): Encapsulated alias table and cycle-safe alias expansion engine.
+- [include/lexer.h](include/lexer.h) & [src/lexer.c](src/lexer.c): Lexical analyzer and scanner handling quote states, backslash escapes, variable expansion, and operator recognition.
+- [include/expansion.h](include/expansion.h) & [src/expansion.c](src/expansion.c): Variable lookup, special parameter formatting (`$?`, `$$`), tilde expansion, and identifier validation.
+- [include/parser.h](include/parser.h) & [src/parser.c](src/parser.c): AST parser consuming tokens into a linked list of `Command` structures.
+- [include/pipeline.h](include/pipeline.h) & [src/pipeline.c](src/pipeline.c): Manages iterative pipe descriptor creation, process group assignment, and pipeline stage synchronization.
+- [include/executor.h](include/executor.h) & [src/executor.c](src/executor.c): Spawns child processes, applies file redirections (`<`, `>`, `>>`), handles built-ins in subshells, and executes binaries via `execvp`.
+- [include/builtins.h](include/builtins.h) & [src/builtins.c](src/builtins.c): Executes `cd`, `exit`, `jobs`, `fg`, `bg`, `export`, `unset`, `env`, `alias`, and `unalias` directly in the shell process.
+- [include/jobs.h](include/jobs.h) & [src/jobs.c](src/jobs.c): Encapsulated thread-safe Job Table tracking background process groups and job states (`RUNNING`, `STOPPED`, `DONE`).
+- [include/signals.h](include/signals.h) & [src/signals.c](src/signals.c): Signal handler registration, process group signal routing, and terminal ownership transfers.
 
 ---
 
@@ -81,40 +69,49 @@ flowchart TD
 
 ```
 ShellX/
-├── include/                   # C header files (Public interfaces & definitions)
-│   ├── builtins.h            # Built-in command functions (cd, exit)
-│   ├── executor.h            # Process spawning & redirection interface
-│   ├── parser.h              # Syntax parser & command list builder
-│   ├── pipeline.h            # Command AST structure & pipeline executor
-│   └── shell.h               # Prompt macro & history file constants
-├── src/                       # Source implementation files
-│   ├── builtins.c            # cd and exit execution logic
-│   ├── executor.c            # fork, dup2, execvp, waitpid implementation
-│   ├── main.c                # Interactive REPL entry point with Readline
-│   ├── parser.c              # Lexical parser & memory lifecycle functions
-│   └── pipeline.c            # Iterative multi-process IPC pipeline engine
-├── tests/                     # Unit test suite binaries & sources
-│   ├── test_builtins.c       # Tests for cd, exit, and environment fallbacks
-│   ├── test_executor.c       # Tests for process spawning and redirections
-│   ├── test_parser.c         # Tests for tokenization and syntax parsing
-│   └── test_pipeline.c       # Tests for IPC pipeline execution & pipe fds
-├── docs/                      # Architectural & design documentation
-│   ├── architecture.md       # Technical subsystem breakdown
-│   ├── design-decisions.md   # Architectural trade-offs & design choices
-│   ├── future-roadmap.md     # Detailed roadmap to v1.0.0
-│   ├── github-discussions.md # Discussion category framework
-│   ├── labels.md             # Issue & PR label reference
-│   └── milestones.md         # Milestone definitions
-├── .github/                   # Issue forms and PR templates
-│   ├── ISSUE_TEMPLATE/       # Bug report, feature, and doc templates
-│   └── pull_request_template.md
-├── CHANGELOG.md               # Version history (Keep a Changelog 1.0.0)
-├── CODE_OF_CONDUCT.md         # Contributor Covenant Code of Conduct
-├── CONTRIBUTING.md            # Development setup & contribution guide
-├── LICENSE                    # MIT Open Source License
-├── Makefile                   # Build automation rules
-├── README.md                  # Project overview & documentation
-└── SECURITY.md                # Vulnerability disclosure policies
+|-- include/                   # C header files (Public interfaces & definitions)
+|   |-- alias.h               # In-memory alias table & expansion prototypes
+|   |-- builtins.h            # Built-in command declarations
+|   |-- config.h              # Configuration loader & ~/.shellxrc parsing
+|   |-- executor.h            # Process spawning & redirection interface
+|   |-- expansion.h           # Environment expansion & identifier validation
+|   |-- jobs.h                # Job table data structures & management APIs
+|   |-- lexer.h               # Lexical scanner & token definitions
+|   |-- parser.h              # Syntax parser & command AST builder
+|   |-- pipeline.h            # Command AST structure & pipeline executor
+|   |-- shell.h               # Prompt macro & history file constants
+|   \-- signals.h             # POSIX signal handler registrations
+|-- src/                       # Source implementation files
+|   |-- alias.c               # Alias storage, listing, and expansion logic
+|   |-- builtins.c            # Built-in command execution logic
+|   |-- config.c              # ~/.shellxrc line-by-line configuration parser
+|   |-- executor.c            # Process spawning, redirection, and execvp
+|   |-- expansion.c           # Variable resolution, $?, $$, and tilde expansion
+|   |-- jobs.c                # In-memory job table implementation
+|   |-- lexer.c               # Quote-aware tokenizer & scanner
+|   |-- main.c                # Interactive REPL entry point with Readline
+|   |-- parser.c              # Token-to-AST parsing & memory management
+|   |-- pipeline.c            # Iterative multi-process IPC pipeline engine
+|   \-- signals.c             # Signal setup and asynchronous child reaping
+|-- tests/                     # Automated unit and integration test suites
+|   |-- test_builtins.c       # Tests for cd, exit, export, unset, env, alias, unalias
+|   |-- test_config.c         # Tests for ~/.shellxrc, aliases, PS1, comments
+|   |-- test_executor.c       # Tests for process spawning and redirections
+|   |-- test_expansion.c      # Tests for variable expansion, quotes, and escapes
+|   |-- test_jobs.c           # Tests for job table lifecycle and state transitions
+|   |-- test_parser.c         # Tests for tokenization and syntax parsing
+|   |-- test_pipeline.c       # Tests for IPC pipeline execution & pipe fds
+|   \-- test_signals.c        # Tests for signal handlers and child status
+|-- docs/                      # Architectural & design documentation
+|   |-- architecture.md       # Technical subsystem breakdown
+|   |-- design-decisions.md   # Architectural trade-offs & design choices
+|   |-- future-roadmap.md     # Detailed roadmap to v1.0.0
+|   |-- github-discussions.md # Discussion category framework
+|   |-- labels.md             # Issue & PR label reference
+|   \-- milestones.md         # Milestone definitions
+|-- Makefile                   # Build automation rules
+|-- README.md                  # Project overview & documentation
+\-- CHANGELOG.md               # Version history
 ```
 
 ---
@@ -130,7 +127,7 @@ ShellX/
 #### Installing Dependencies (Ubuntu / Debian)
 ```bash
 sudo apt update
-sudo apt install build-essential libreadline-dev
+sudo apt install build-essential libreadline-dev valgrind
 ```
 
 ### Compilation
@@ -144,105 +141,88 @@ The compiled executable is created at `build/shellx`.
 Launch the interactive shell session:
 ```bash
 make run
-```
-Or execute the built binary directly:
-```bash
+# Or directly:
 ./build/shellx
 ```
 
 ### Running the Test Suite
-ShellX features an automated test runner validating parser tokenization, redirection flags, built-ins, and multi-stage pipeline execution:
+ShellX features 8 automated test suites validating every subsystem:
 ```bash
 make test
 ```
-
-### Rebuilding & Cleaning
-```bash
-make clean    # Removes the build/ directory and generated binaries
-make rebuild  # Performs a clean build from scratch
-```
-
----
-
-## Interactive Features & Keyboard Shortcuts
-
-ShellX provides a modern interactive shell experience powered by **GNU Readline**:
-
-- **Configurable Prompt**: Displays `ShellX$ ` before every command.
-- **Line Editing**: Use Left/Right arrow keys, `Ctrl+A` (beginning of line), `Ctrl+E` (end of line), `Ctrl+K` (kill line).
-- **History Navigation**: Use **Up** and **Down** arrow keys to traverse previous commands.
-- **Persistent History**: Commands are saved to `~/.shellx_history` upon exit and loaded automatically on startup. Consecutive duplicate commands and blank inputs are automatically filtered out.
-- **Clean EOF Exit**: Press `Ctrl+D` on an empty line to exit the shell cleanly.
 
 ---
 
 ## Example Terminal Sessions
 
-Below are actual output sessions demonstrating **ShellX** supported capabilities.
-
-### 1. Simple Commands & Built-in Operations
+### 1. Startup Configuration (`~/.shellxrc`)
 ```text
-ShellX$ echo hello
-hello
-ShellX$ cd tests
-ShellX$ exit
+# Content of ~/.shellxrc:
+PROJECT=ShellX
+PS1="ShellX[custom]$ "
+alias ll="ls -la"
+alias gs="git status"
+
+# Starting ShellX automatically loads ~/.shellxrc:
+$ ./build/shellx
+ShellX[custom]$ echo $PROJECT
+ShellX
+ShellX[custom]$ ll /tmp
+total 48
+...
+ShellX[custom]$ gs
+On branch main
+...
 ```
 
-### 2. Pipeline Execution
+### 2. Managing Aliases
 ```text
-ShellX$ printf hello | grep hello
-hello
-ShellX$ seq 1 10 | tail -n 3
-8
-9
-10
+ShellX$ alias c="clear"
+ShellX$ alias
+alias c='clear'
+alias gs='git status'
+alias ll='ls -la'
+ShellX$ unalias c
 ```
 
-### 3. File Input & Output Redirection
+### 3. Quoting, Escaping & Operator Shielding
 ```text
-ShellX$ echo "ShellX Production Release" > output.txt
-ShellX$ cat < output.txt
-ShellX Production Release
-ShellX$ echo "Appending extra line" >> output.txt
-ShellX$ cat < output.txt | grep Appending
-Appending extra line
+ShellX$ echo 'hello | world'
+hello | world
+ShellX$ echo "Quotes protect > and & operators"
+Quotes protect > and & operators
+ShellX$ echo Escaped\ \|\ Operator
+Escaped | Operator
 ```
 
----
+### 4. Environment Variables & Special Parameters
+```text
+ShellX$ export VERSION=1.0
+ShellX$ echo "Building ShellX version $VERSION"
+Building ShellX version 1.0
+ShellX$ echo "Shell PID: $$"
+Shell PID: 4522
+ShellX$ false
+ShellX$ echo "Last Exit Status: $?"
+Last Exit Status: 1
+```
 
-## Roadmap
+### 5. Pipeline & File Redirection
+```text
+ShellX$ echo "Line 1\nLine 2\nLine 3" > data.txt
+ShellX$ cat < data.txt | grep "Line 2"
+Line 2
+```
 
-- [x] **Phase 1 — Core Shell Engine (v0.1.0)**
-  - [x] Command line tokenization and whitespace handling
-  - [x] Command linked list structure allocation and destruction
-  - [x] Input (`<`), Output (`>`), and Append (`>>`) redirections
-  - [x] Multi-stage process pipelines (`cmd1 | cmd2 | cmd3`)
-  - [x] In-process built-ins (`cd`, `exit`)
-  - [x] Automated unit test suite with 100% test pass rate
-- [x] **Phase 2 — Line Editing & Persistent History (v0.2.0)**
-  - [x] Integration with GNU Readline
-  - [x] Interactive `ShellX$ ` prompt and line editing keybindings
-  - [x] Up/Down arrow history navigation
-  - [x] Persistent command history stored in `~/.shellx_history` with duplicate filtering
-- [ ] **Phase 3 — POSIX Job Control & Signal Handling (v0.3.0)**
-  - [ ] Background job execution (`&`) with process table tracking
-  - [ ] Process group creation (`setpgid`) and terminal control (`tcsetpgrp`)
-  - [ ] Foreground (`fg`) and background (`bg`) built-in commands
-  - [ ] Custom signal handlers (`SIGINT`, `SIGTSTP`, `SIGCHLD`)
-- [ ] **Phase 4 — Production Refactoring & Scripting Support (v0.4.0)**
-  - [ ] Non-interactive script file execution (`shellx script.sh`)
-  - [ ] Environment variable expansion (`$VAR`) and exit code `$?` status
-  - [ ] Dynamic heap buffer expansion for arbitrary command lengths
-- [ ] **Phase 5 — Stable v1.0 Release (v1.0.0)**
-  - [ ] Continuous Integration (CI) test workflows
-  - [ ] Valgrind leak-free validation suite
-  - [ ] Full POSIX shell conformance documentation
-
----
-
-## Contributing
-
-Contributions are welcome! Please review [CONTRIBUTING.md](CONTRIBUTING.md) for environment setup, coding style standards, commit conventions, and testing requirements before submitting pull requests.
+### 6. POSIX Job Control
+```text
+ShellX$ sleep 30 &
+[1] 4612
+ShellX$ jobs
+[1]  4612 Running  sleep 30 &
+ShellX$ fg 1
+sleep 30
+```
 
 ---
 
