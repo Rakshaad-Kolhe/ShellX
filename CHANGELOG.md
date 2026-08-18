@@ -10,8 +10,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Planned
-- Script file execution mode and environment variable expansion (`v0.4.0`).
+- Script file execution mode (`shellx script.sh`).
 - GitHub Actions CI matrix builds and Valgrind memory leak verification (`v1.0.0`).
+
+---
+
+## [0.4.0] - 2026-08-18
+
+### Added
+- **Quote-Aware Lexical Scanner (`lexer.c`)**: Introduced full lexical scanner and dynamic token stream representation (`TokenList`), separating scanning from AST parsing.
+- **Single Quoting (`'...'`)**: Preserves all enclosed characters literally without parameter expansion or operator tokenization.
+- **Double Quoting (`"..."`)**: Enables variable and escape interpolation while preserving spaces and operator literals (`|`, `<`, `>`, `>>`, `&`).
+- **Backslash Escapes (`\`)**: Supports single-character escaping in unquoted contexts and inside double quotes (`\$`, `\"`, `\\`).
+- **Environment & Parameter Expansion (`expansion.c`)**:
+  - `$VAR` / `${VAR}` variable interpolation from the process environment.
+  - `$?` expansion to previous foreground command or pipeline exit status.
+  - `$$` expansion to current shell process ID (`getpid()`).
+  - `~` and `~/...` tilde path expansion resolving to `$HOME`.
+- **Environment Built-ins (`builtins.c`)**:
+  - `export [NAME[=VALUE] ...]`: Sets or lists exported variables with POSIX identifier validation (`[a-zA-Z_][a-zA-Z0-9_]*`).
+  - `unset [NAME ...]`: Removes specified environment variables.
+  - `env`: Dumps active environment variables.
+  - `cd`: Automatically synchronizes `PWD` environment variable upon directory navigation.
+- **Pipeline Subshell Built-in Execution**: Updated executor (`spawn_child`) so built-in commands run seamlessly within subshells when placed inside multi-stage pipelines.
+- **Comprehensive Test Suite (`test_expansion.c`)**: Added 11 new expansion/quoting test suites and expanded `test_builtins.c` with 100% pass rate and zero Valgrind leaks.
 
 ---
 
@@ -41,10 +63,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [0.1.0] - 2026-07-23
 
 ### Added
-- **Lexical Parser & AST Subsystem**: Implemented `parse_command_line` and `free_command_list` in [src/parser.c](file:///wsl.localhost/Ubuntu/home/rakshaad/projects/ShellX/src/parser.c) for tokenizing input strings into linked `Command` nodes.
+- **Lexical Parser & AST Subsystem**: Implemented `parse_command_line` and `free_command_list` in `src/parser.c` for tokenizing input strings into linked `Command` nodes.
 - **I/O Redirection**: Added support for input redirection (`<`), output truncation (`>`), and output appending (`>>`).
-- **Pipeline Engine**: Implemented `execute_pipeline` in [src/pipeline.c](file:///wsl.localhost/Ubuntu/home/rakshaad/projects/ShellX/src/pipeline.c) using POSIX `pipe()`, `dup2()`, and iterative rolling descriptor management.
-- **Process Execution Engine**: Implemented child process spawning and exit status collection in [src/executor.c](file:///wsl.localhost/Ubuntu/home/rakshaad/projects/ShellX/src/executor.c) via `fork`, `execvp`, and `waitpid`.
-- **Built-in Command Engine**: Implemented `cd` (with `$HOME` fallback and argument checks) and `exit` in [src/builtins.c](file:///wsl.localhost/Ubuntu/home/rakshaad/projects/ShellX/src/builtins.c).
+- **Pipeline Engine**: Implemented `execute_pipeline` in `src/pipeline.c` using POSIX `pipe()`, `dup2()`, and iterative rolling descriptor management.
+- **Process Execution Engine**: Implemented child process spawning and exit status collection in `src/executor.c` via `fork`, `execvp`, and `waitpid`.
+- **Built-in Command Engine**: Implemented `cd` (with `$HOME` fallback and argument checks) and `exit` in `src/builtins.c`.
 - **Unit Test Suite**: Developed modular unit test binaries (`test_parser`, `test_executor`, `test_builtins`, `test_pipeline`) integrated with `make test`.
-- **Repository Engineering & Documentation**: Created professional `README.md`, technical architecture specifications (`docs/architecture.md`), design decisions (`docs/design-decisions.md`), future roadmap (`docs/future-roadmap.md`), contribution guidelines (`CONTRIBUTING.md`), issue templates, PR template, security policy (`SECURITY.md`), and MIT license.

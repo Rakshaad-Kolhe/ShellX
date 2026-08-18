@@ -1,8 +1,7 @@
 #define _POSIX_C_SOURCE 200809L
 
 #include "executor.h"
-
-
+#include "builtins.h"
 #include "signals.h"
 
 #include <errno.h>
@@ -142,6 +141,12 @@ pid_t spawn_child(const Command *command, int input_fd, int output_fd,
 
         if (apply_redirections(command) != 0) {
             _exit(1);
+        }
+
+        if (is_builtin(command)) {
+            int should_exit = 0;
+            int status = execute_builtin(command, &should_exit);
+            _exit(status);
         }
 
         execvp(command->args[0], command->args);

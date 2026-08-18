@@ -1,21 +1,21 @@
 # ShellX Future Roadmap (v0.1.0 to v1.0.0)
 
-This document outlines the planned development trajectory for **ShellX** from its current baseline (`v0.1.0`) to a feature-complete, production-grade POSIX shell (`v1.0.0`).
+This document outlines the planned development trajectory for **ShellX** from its initial baseline (`v0.1.0`) to a feature-complete, production-grade POSIX shell (`v1.0.0`).
 
 ---
 
 ## Release Timeline Overview
 
 ```
-v0.1.0 (Current)       v0.2.0                 v0.3.0                 v0.4.0                 v1.0.0
-  [Core Engine]  ---> [Readline & History] ---> [Job Control & Signals] ---> [Scripting & Vars] ---> [Stable Release]
+v0.1.0                 v0.2.0                 v0.3.0                 v0.4.0 (Current)       v0.5.0                 v1.0.0
+  [Core Engine]  ---> [Readline & History] ---> [Job Control & Signals] ---> [Expansion & Built-ins] ---> [Script Execution] ---> [Stable Release]
 ```
 
 ---
 
 ## Milestone Detail
 
-### Version 0.1.0 — Core Shell Engine (Current Implementation)
+### Version 0.1.0 — Core Shell Engine
 - **Status**: Completed
 - **Focus**: Core parsing, execution, redirection, and pipeline IPC.
 - **Deliverables**:
@@ -29,39 +29,53 @@ v0.1.0 (Current)       v0.2.0                 v0.3.0                 v0.4.0     
 ---
 
 ### Version 0.2.0 — Line Editing & Persistent History
-- **Status**: Planned
+- **Status**: Completed
 - **Focus**: Enhancing the interactive shell user experience.
 - **Deliverables**:
-  - Integrate GNU Readline or BSD Editline for line editing.
-  - Implement arrow key navigation (history traversal, cursor movement).
-  - Add persistent command history file (`~/.shellx_history`).
-  - Add tab completion for PATH executables and local file system paths.
-  - Handle `SIGINT` (Ctrl+C) during input to cancel current line without terminating shell.
+  - GNU Readline integration for interactive command line editing.
+  - Configurable `ShellX$ ` prompt macro.
+  - History traversal with Up/Down arrow keys.
+  - Persistent command history file (`~/.shellx_history`) with consecutive duplicate filtering.
+  - Clean EOF exit handling (`Ctrl+D`).
 
 ---
 
 ### Version 0.3.0 — POSIX Job Control & Background Jobs
-- **Status**: Planned
+- **Status**: Completed
 - **Focus**: Asynchronous process execution and terminal signal control.
 - **Deliverables**:
   - Asynchronous background command execution (`&`).
   - Process group creation (`setpgid`) and shell process group isolation.
   - Terminal foreground control transfer (`tcsetpgrp`).
   - Asynchronous child reaping with `SIGCHLD` signal handler to avoid zombie processes.
-  - Implement job control built-in commands: `jobs`, `fg`, `bg`.
-  - Handle `SIGTSTP` (Ctrl+Z) to suspend foreground processes.
+  - Built-in job control commands: `jobs`, `fg`, `bg`.
+  - Signal handling for `SIGINT` (Ctrl+C) and `SIGTSTP` (Ctrl+Z).
 
 ---
 
-### Version 0.4.0 — Environment Expansion & Scripting
-- **Status**: Planned
-- **Focus**: Non-interactive file execution and variable evaluation.
+### Version 0.4.0 — Shell Expansion, Quoting & Environment Built-ins (Current Release)
+- **Status**: Completed
+- **Focus**: Lexical quoting, parameter expansions, and environment built-ins.
 - **Deliverables**:
-  - Non-interactive script execution mode (`shellx filename.sh`).
-  - Environment variable expansion (`$VAR`, `$HOME`, `$PATH`).
-  - Last process exit status expansion (`$?`).
-  - Built-in commands: `export`, `unset`, `pwd`, `echo`.
+  - Full lexer with quote-aware scanner (`lexer.c`) separating quotes, escapes, and operators.
+  - Single quoting (`'...'`) with literal text preservation.
+  - Double quoting (`"..."`) with variable/escape expansion and operator shielding.
+  - Backslash escaping (`\`) outside and inside double quotes.
+  - Environment variable expansion (`$VAR`, `${VAR}`) and tilde expansion (`~`, `~/...`).
+  - Special parameters: `$?` (last exit status) and `$$` (shell PID).
+  - Built-in commands: `export`, `unset`, `env`, and `cd` with `PWD` tracking.
+  - Pipeline subshell execution for built-ins in child stages.
+
+---
+
+### Version 0.5.0 — Scripting Support & Non-Interactive Mode
+- **Status**: Planned
+- **Focus**: Non-interactive file execution and compound commands.
+- **Deliverables**:
+  - Non-interactive script execution (`shellx filename.sh`).
+  - Command chaining with logical operators (`&&`, `||`, `;`).
   - Dynamic heap argument allocation replacing static `SHELLX_MAX_ARGS` limit.
+  - Command substitution (`$(command)` / ```command```).
 
 ---
 

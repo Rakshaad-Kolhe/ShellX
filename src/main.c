@@ -1,5 +1,8 @@
+#define _POSIX_C_SOURCE 200809L
+
 #include "builtins.h"
 #include "executor.h"
+#include "expansion.h"
 #include "jobs.h"
 #include "parser.h"
 #include "pipeline.h"
@@ -10,6 +13,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
 
 #include <readline/history.h>
 #include <readline/readline.h>
@@ -70,6 +74,17 @@ int main(void)
 {
     char *history_path;
     int should_exit = 0;
+    int last_exit_status = 0;
+    pid_t shell_pid = getpid();
+    ShellContext context = {
+        .last_exit_status = 0,
+        .shell_pid = shell_pid
+    };
+    char cwd[4096];
+
+    if (getcwd(cwd, sizeof(cwd)) != NULL) {
+        setenv("PWD", cwd, 1);
+    }
 
     init_signals();
     init_job_table();
@@ -96,18 +111,26 @@ int main(void)
                 add_history(line);
             }
 
-            commands = parse_command_line(line);
+            context.last_exit_status = last_exit_status;
+            commands = parse_command_line_with_context(line, &context);
             if (commands != NULL) {
                 if (commands->next != NULL) {
-                    execute_pipeline(commands);
+                    int status = execute_pipeline(commands);
+                    if (!commands->run_in_background) {
+                        last_exit_status = status;
+                    }
                 } else if (is_builtin(commands)) {
-                    execute_builtin(commands, &should_exit);
+                    int status = execute_builtin(commands, &should_exit);
+                    last_exit_status = status;
                 } else {
-                    execute_command(commands);
+                    int status = execute_command(commands);
+                    if (!commands->run_in_background) {
+                        last_exit_status = status;
+                    }
                 }
 
-                free_command_list(commands);
-            }
+            free_command_list(commands);
+        }
         }
 
         free(line);

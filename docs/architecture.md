@@ -6,23 +6,81 @@ This document provides a comprehensive technical overview of the **ShellX** arch
 
 ## Architecture Overview
 
-ShellX is structured into five decoupled subsystems:
+ShellX is structured into decoupled, modular subsystems:
 
-1. **Parser & AST Builder**: Converts raw user input strings into a sanitized linked list of `Command` abstractions.
-2. **Built-in Command Engine**: Handles shell-internal state modifications (`cd`, `exit`) directly inside the parent process.
-3. **Single Process Execution Engine**: Manages process creation (`fork`), standard stream manipulation (`dup2`), program execution (`execvp`), and parent synchronization (`waitpid`).
-4. **Pipeline Inter-Process Communication (IPC) Subsystem**: Chains arbitrary numbers of child processes together via POSIX pipes (`pipe`).
-5. **Job Management Subsystem**: Maintains an in-memory Job Table tracking background processes and pipelines across shell sessions.
+1. **Lexical Scanner & Quoting Engine (`lexer.c`)**: Tokenizes raw user input with full state tracking for single quotes (`'`), double quotes (`"`), backslash escapes (`\`), and operators (`|`, `<`, `>`, `>>`, `&`).
+2. **Expansion Engine (`expansion.c`)**: Evaluates environment variables (`$VAR`), special shell parameters (`$?`, `$$`), and tildes (`~`, `~/...`) within an explicit execution context (`ShellContext`).
+3. **Parser & AST Builder (`parser.c`)**: Converts validated token streams into a sanitized linked list of `Command` abstractions.
+4. **Built-in Command Engine (`builtins.c`)**: Executes shell state modification commands (`cd`, `exit`, `jobs`, `fg`, `bg`, `export`, `unset`, `env`) directly inside the shell process or within pipeline subshells.
+5. **Process Execution Engine (`executor.c`)**: Manages process creation (`fork`), stream redirection (`dup2`), binary execution (`execvp`), and parent synchronization (`waitpid`).
+6. **Pipeline Inter-Process Communication (IPC) Subsystem (`pipeline.c`)**: Chains arbitrary numbers of child processes together using an iterative rolling POSIX pipe model.
+7. **Job Management & Signal Handling Subsystem (`jobs.c`, `signals.c`)**: Tracks process groups, manages terminal control (`tcsetpgrp`), and provides asynchronous zombie reaping (`SIGCHLD`).
 
 ---
 
-## 1. Parser & Command AST Representation
+## 1. Lexical Scanner & Tokenization (`lexer.c`)
 
-The parser implementation resides in [src/parser.c](file:///wsl.localhost/Ubuntu/home/rakshaad/projects/ShellX/src/parser.c) and [include/parser.h](file:///wsl.localhost/Ubuntu/home/rakshaad/projects/ShellX/include/parser.h).
+The scanner resides in `include/lexer.h` and `src/lexer.c`.
 
-### Data Structure: `Command` Node
+### Data Structures: `Token` and `TokenList`
 
-Every parsed command is represented by a heap-allocated `Command` node:
+```c
+typedef enum TokenType {
+    TOKEN_WORD,
+    TOKEN_PIPE,         /* | */
+    TOKEN_REDIRECT_IN,  /* < */
+    TOKEN_REDIRECT_OUT, /* > */
+    TOKEN_APPEND_OUT,   /* >> */
+    TOKEN_AMPERSAND     /* & */
+} TokenType;
+
+typedef struct Token {
+    TokenType type;
+    char *value;
+} Token;
+
+typedef struct TokenList {
+    Token *tokens;
+    size_t count;
+    size_t capacity;
+} TokenList;
+```
+
+### Scanning States & Rules
+1. **Single-Quote State (`'...'`)**: All characters within single quotes are preserved strictly as literal data. Variable interpolation (`$`), escapes (`\`), and operator recognition are completely disabled.
+2. **Double-Quote State (`"..."`)**: Preserves spaces and operators literally while performing variable expansion (`$VAR`, `$?`, `$$`) and respecting escape sequences (`\$`, `\"`, `\\`).
+3. **Backslash Escapes (`\`)**:
+  - Outside quotes: Quotes the immediate next character literally, stripping the backslash.
+  - Inside double quotes: Escapes `$`, `"`, `\`, and `\n`.
+4. **Tilde Expansion**: Leading `~` or `~/` at word start resolves to `$HOME` using `get_tilde_expansion()`.
+5. **Operator Recognition**: Unquoted `|`, `<`, `>`, `>>`, and `&` emit distinct token types. Quoted or escaped instances emit `TOKEN_WORD` tokens, preventing operator spoofing.
+
+---
+
+## 2. Parameter Expansion & Shell Context (`expansion.c`)
+
+The expansion module resides in `include/expansion.h` and `src/expansion.c`.
+
+### Shell Context Structure
+
+```c
+typedef struct ShellContext {
+    int last_exit_status;  /* Exit status of previous foreground command */
+    pid_t shell_pid;       /* PID of the running ShellX process */
+} ShellContext;
+```
+
+### Parameter Expansion Logic
+- **`$?`**: Formatted as a base-10 decimal string representation of `context->last_exit_status`.
+- **`$$`**: Formatted as a base-10 decimal string representation of `context->shell_pid`.
+- **`$VAR` / `${VAR}`**: Looked up via `getenv(name)`. Unset variables expand to an empty string `""`.
+- **Identifier Validation (`is_valid_identifier`)**: Validates that variable names conform to `[a-zA-Z_][a-zA-Z0-9_]*`.
+
+---
+
+## 3. Parser & Command AST Representation (`parser.c`)
+
+The parser consumes tokens produced by the lexer and builds a singly linked list of `Command` structures:
 
 ```c
 typedef struct Command {
@@ -36,98 +94,23 @@ typedef struct Command {
 } Command;
 ```
 
-### Parsing Pipeline
-1. **Whitespace Skipping**: `skip_whitespace` advances an internal input cursor past leading/interstitial spaces (`isspace`).
-2. **Word Extraction**: `parse_word` extracts continuous non-whitespace, non-operator tokens into dynamically allocated character arrays (`copy_token`).
-3. **Redirection Processing**: `parse_redirection` detects `<` (input), `>` (truncate output), and `>>` (append output) operators, storing target paths directly within the current `Command` structure.
-4. **Pipeline Stage Creation**: When encountering the pipe operator `|`, the parser allocates a new `Command` structure via `allocate_command` and links it to `command->next`.
-5. **Memory Lifecycle**: The lifecycle of the AST is completely managed. Callers invoke `free_command_list(Command *commands)`, which recursively traverses `next`, freeing `args[i]`, `input_path`, `output_path`, and node handles.
+### Memory Ownership Transfer
+The parser transfers allocated string ownership from `TokenList` directly into `command->args` and redirection paths by setting token values to `NULL`, eliminating redundant string allocations.
 
 ---
 
-## 2. Process Execution Engine
+## 4. Built-in Environment & State Commands (`builtins.c`)
 
-The execution subsystem resides in [src/executor.c](file:///wsl.localhost/Ubuntu/home/rakshaad/projects/ShellX/src/executor.c) and [include/executor.h](file:///wsl.localhost/Ubuntu/home/rakshaad/projects/ShellX/include/executor.h).
-
-### Child Process Spawning (`spawn_child`)
-
-`spawn_child` abstracts process creation and file descriptor redirection for single commands and pipeline stages alike:
-
-```c
-pid_t spawn_child(const Command *command, int input_fd, int output_fd, int close_fd);
-```
-
-#### Child Process Execution Sequence (`pid == 0`)
-1. **Descriptor Duplication**: If `input_fd != -1`, it is duplicated to `STDIN_FILENO` via `dup2`. If `output_fd != -1`, it is duplicated to `STDOUT_FILENO`.
-2. **Unused Descriptor Cleanup**: `close_fd`, `input_fd`, and `output_fd` are closed in the child process to avoid file descriptor leaks.
-3. **Explicit Redirection Application**: `apply_redirections` processes command-specific redirection files (`input_path`, `output_path`):
-   - Input redirection: `open(path, O_RDONLY)` -> `dup2(fd, STDIN_FILENO)`.
-   - Output redirection: `open(path, O_WRONLY | O_CREAT | (append ? O_APPEND : O_TRUNC), 0666)` -> `dup2(fd, STDOUT_FILENO)`.
-4. **Program Loading**: `execvp(command->args[0], command->args)` replaces the child image with the target binary searched via system `PATH`.
-5. **Failure Fallback**: If `execvp` fails (e.g., command not found), perror prints the error and `_exit(127)` terminates the child process immediately.
-
-### Exit Status Collection
-`execute_command` synchronizes with foreground child processes using `wait_for_child`:
-- `WIFEXITED(status)`: Returns `WEXITSTATUS(status)`.
-- `WIFSIGNALED(status)`: Returns `128 + WTERMSIG(status)` in accordance with standard POSIX conventions.
+### Supported Built-ins
+- **`export [NAME[=VALUE] ...]`**: Validates identifier syntax and calls `setenv(name, value, 1)`. When invoked without arguments, prints exported variables.
+- **`unset [NAME ...]`**: Validates identifier syntax and calls `unsetenv(name)`.
+- **`env`**: Dumps all active variables from `environ`. Rejects extraneous positional arguments.
+- **`cd [PATH]`**: Updates current directory and automatically synchronizes the `PWD` environment variable via `setenv("PWD", cwd, 1)`.
+- **`jobs`, `fg`, `bg`, `exit`**: Manage job table state, foreground terminal handoff, and clean shell shutdown.
 
 ---
 
-## 3. Pipeline Model
+## 5. Process Execution & Rolling Pipeline IPC
 
-The pipeline subsystem resides in [src/pipeline.c](file:///wsl.localhost/Ubuntu/home/rakshaad/projects/ShellX/src/pipeline.c) and [include/pipeline.h](file:///wsl.localhost/Ubuntu/home/rakshaad/projects/ShellX/include/pipeline.h).
-
-### Iterative Pipeline Design
-
-Rather than using recursive functions or holding all pipe descriptors open simultaneously, ShellX uses an **iterative rolling descriptor pattern**:
-
-```
-Stage 1 (cmd1)          Stage 2 (cmd2)          Stage 3 (cmd3)
-  [Stdout] ---------------> [Stdin]
-  Write to pipe_fds[1]     Read from prev_read_fd
-                           Write to pipe_fds[1] ---> [Stdin]
-                                                     Read from prev_read_fd
-```
-
----
-
-## 4. Job Management Subsystem
-
-The Job Management subsystem resides in [src/jobs.c](file:///wsl.localhost/Ubuntu/home/rakshaad/projects/ShellX/src/jobs.c) and [include/jobs.h](file:///wsl.localhost/Ubuntu/home/rakshaad/projects/ShellX/include/jobs.h).
-
-### Data Structure: `Job`
-
-```c
-typedef enum JobState {
-    JOB_RUNNING,
-    JOB_STOPPED,
-    JOB_DONE
-} JobState;
-
-typedef struct Job {
-    int job_id;               /* 1-based sequential job ID */
-    pid_t pgid;               /* Process Group ID (leader PID) */
-    pid_t pid;                /* Leader process PID */
-    char *command;            /* Reconstructed command string */
-    JobState state;           /* JobState enum */
-    int is_background;        /* 1 for background job, 0 for foreground */
-    struct Job *next;         /* Pointer to next job in internal list */
-} Job;
-```
-
-### Job Table Responsibilities
-- `init_job_table()`: Initializes the internal job list and resets job ID counter to 1.
-- `add_job(pid, pgid, command_str, is_bg)`: Allocates a new `Job` struct, assigns a sequential 1-based `job_id`, formats the command string (`format_command_string`), and registers it in the internal job table.
-- `find_job_by_id(job_id)` / `find_job_by_pid(pid)`: Searches the internal job table by job ID or leader PID.
-- `remove_job_by_id(job_id)` / `remove_completed_jobs()`: Removes and frees specified or completed job nodes.
-- `destroy_job_table()`: Frees all allocated jobs and command strings upon shell shutdown for zero Valgrind memory leaks.
-
----
-
-## 5. Current System Limitations
-
-The current implementation (`v0.3.0-alpha`) tracks background jobs internally in the Job Table. Future job control capabilities scheduled for `v0.3.0` include:
-
-- **User-facing Job Built-ins**: `jobs`, `fg`, and `bg` CLI commands.
-- **Process Groups & Terminal Control**: `setpgid` process group creation and `tcsetpgrp` terminal ownership transfers.
-- **Asynchronous Child Reaping**: `SIGCHLD` signal handler to automatically reap completed background processes and prevent zombie accumulation.
+- **Iterative Rolling Pipeline**: Employs an iterative loop keeping at most 2 pipe descriptors active simultaneously in the parent process.
+- **Pipeline Subshell Execution**: `spawn_child` detects built-in commands and executes them directly within the child subshell via `execute_builtin`, enabling commands like `env | grep VAR` or `export | sort`.
